@@ -1,0 +1,37 @@
+# Outline Optimized – multi VPS deployment (worker node)
+#
+# Runs the background services: worker + cron. No inbound ports, no tunnel.
+# It shares the same image, database, Redis and S3 storage as the app nodes;
+# SECRET_KEY / UTILS_SECRET / URL must be identical across all nodes.
+
+name: outline-worker
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  worker:
+    image: ${OUTLINE_IMAGE:-outline-optimized:local}
+    restart: unless-stopped
+    init: true
+    command:
+      - node
+      - build/server/index.js
+      - --services=worker,cron
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # The kernel enforces WORKER_MEM_LIMIT as a hard cap; Node derives its
+      # V8 heap limit from it automatically (single process, ~80% budget).
+    ports: []
+    volumes:
+      - uploads:/var/lib/outline/data
+    mem_limit: ${WORKER_MEM_LIMIT:-1g}
+    logging: *logging
+
+volumes:
+  uploads:

@@ -1,0 +1,72 @@
+# Outline Optimized – multi VPS deployment (app node)
+#
+# Runs the user-facing Outline services: web + websockets + collaboration.
+# Traffic enters through a Cloudflare Tunnel, so this node needs no open
+# inbound ports either. Point DATABASE_URL / REDIS_URL at the core node over
+# your private network (WireGuard / Tailscale).
+#
+# Quick start:
+#   cp .env.example .env       # fill in everything marked required
+#   ../build.sh                # or pull your registry image
+#   docker compose up -d
+#   curl http://localhost:3000/_health
+#
+# Cloudflare Tunnel: create a tunnel for this node and map your public
+# hostname to http://outline:3000, then:
+#   docker compose --profile tunnel up -d
+#
+# Scaling: run several of these nodes behind additional tunnels / load
+# balancing in the Cloudflare dashboard. REDIS_COLLABORATION_URL is what
+# makes collaboration and websockets state sync across replicas.
+
+name: outline-app
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  outline:
+    image: ${OUTLINE_IMAGE:-outline-optimized:local}
+    restart: unless-stopped
+    init: true
+    # Migrations run before boot; they are idempotent so this is safe on
+    # every start and upgrade.
+    command:
+      - sh
+      - -c
+      - node_modules/.bin/sequelize db:migrate && exec node build/server/index.js
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # The kernel enforces OUTLINE_MEM_LIMIT as a hard cap; Node derives the
+      # per-process V8 heap limit from it automatically (~80% budget split
+      # across WEB_CONCURRENCY processes, 256MB floor each).
+    ports:
+      - "${OUTLINE_BIND_IP:-127.0.0.1}:${OUTLINE_PORT:-3000}:3000"
+    volumes:
+      # Only used for temporary import/export files. Real attachments must be
+      # on S3-compatible storage (FILE_STORAGE=s3) in a multi-node setup.
+      - uploads:/var/lib/outline/data
+    mem_limit: ${OUTLINE_MEM_LIMIT:-2g}
+    logging: *logging
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      # cloudflared exits with a clear error if this is empty; the profile
+      # keeps it from running at all until CF_TUNNEL_TOKEN is set.
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN:-}
+    depends_on:
+      - outline
+    mem_limit: ${TUNNEL_MEM_LIMIT:-128m}
+    logging: *logging
+
+volumes:
+  uploads:

@@ -1,0 +1,133 @@
+# Outline Optimized – single VPS deployment
+#
+# Runs the complete stack on one host: Postgres, Redis, Outline (web +
+# websockets + collaboration + worker + cron) and an optional Cloudflare
+# Tunnel, so no inbound ports need to be opened on the VPS at all.
+#
+# Quick start:
+#   cp .env.example .env      # then fill in the required values
+#   ../build.sh               # build the optimized image from this repo
+#   docker compose up -d
+#   curl http://localhost:3000/_health
+#
+# Cloudflare Tunnel (recommended):
+#   1. In the Cloudflare Zero Trust dashboard create a Tunnel of type
+#      "Cloudflared" and copy its token.
+#   2. Put the token in CF_TUNNEL_TOKEN in .env.
+#   3. In the tunnel's Public Hostname settings map your domain to
+#      http://outline:3000 (service type HTTP).
+#   4. docker compose --profile tunnel up -d
+
+name: outline
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-128MB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-256MB}
+      - -c
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-100}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-outline}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    mem_limit: ${POSTGRES_MEM_LIMIT:-512m}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    logging: *logging
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    # volatile-lru evicts only keys that have a TTL (caches); Bull queue and
+    # pub/sub keys never carry a TTL and are therefore never evicted.
+    command:
+      - redis-server
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-256mb}
+      - --maxmemory-policy
+      - volatile-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    volumes:
+      - redis-data:/data
+    mem_limit: ${REDIS_MEM_LIMIT:-384m}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    logging: *logging
+
+  outline:
+    image: ${OUTLINE_IMAGE:-outline-optimized:local}
+    restart: unless-stopped
+    init: true
+    # Migrations run before boot; they are idempotent so this is safe on
+    # every start and upgrade.
+    command:
+      - sh
+      - -c
+      - node_modules/.bin/sequelize db:migrate && exec node build/server/index.js
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-outline}
+      REDIS_URL: redis://redis:6379
+      PGSSLMODE: disable
+      # The kernel enforces OUTLINE_MEM_LIMIT as a hard cap for the container;
+      # Node reads the cgroup limit at startup and automatically derives a
+      # per-process V8 heap limit from it (~80% budget, 256MB floor). Set
+      # NODE_OPTIONS=--max-old-space-size=N in .env to override manually.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      # Bound to loopback by default; the tunnel reaches it over the Docker
+      # network. Set OUTLINE_BIND_IP=0.0.0.0 only if you terminate TLS with
+      # your own reverse proxy instead of the tunnel.
+      - "${OUTLINE_BIND_IP:-127.0.0.1}:${OUTLINE_PORT:-3000}:3000"
+    volumes:
+      - uploads:/var/lib/outline/data
+    mem_limit: ${OUTLINE_MEM_LIMIT:-1g}
+    logging: *logging
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      # cloudflared exits with a clear error if this is empty; the profile
+      # keeps it from running at all until CF_TUNNEL_TOKEN is set.
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN:-}
+    depends_on:
+      - outline
+    mem_limit: ${TUNNEL_MEM_LIMIT:-128m}
+    logging: *logging
+
+volumes:
+  postgres-data:
+  redis-data:
+  uploads:

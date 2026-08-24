@@ -1,0 +1,79 @@
+# Outline Optimized – multi VPS deployment (core node)
+#
+# This host runs the stateful services: Postgres and Redis. It is never
+# exposed to the internet; Outline nodes reach it over a private network
+# (WireGuard / Tailscale or any private VLAN).
+#
+# Quick start:
+#   cp .env.example .env      # set POSTGRES_PASSWORD and CORE_BIND_IP
+#   docker compose up -d
+#
+# CORE_BIND_IP must be this node's address on the private network, e.g. its
+# Tailscale/WireGuard IP (100.x.y.z) so only mesh peers can connect.
+
+name: outline-core
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-768MB}
+      - -c
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-200}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-outline}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "${CORE_BIND_IP:?set CORE_BIND_IP to this node's private VPN IP in .env}:5432:5432"
+    mem_limit: ${POSTGRES_MEM_LIMIT:-1g}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    logging: *logging
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    # volatile-lru evicts only keys that have a TTL (caches); Bull queue and
+    # pub/sub keys never carry a TTL and are therefore never evicted.
+    command:
+      - redis-server
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-512mb}
+      - --maxmemory-policy
+      - volatile-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    volumes:
+      - redis-data:/data
+    ports:
+      - "${CORE_BIND_IP:?set CORE_BIND_IP to this node's private VPN IP in .env}:6379:6379"
+    mem_limit: ${REDIS_MEM_LIMIT:-768m}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    logging: *logging
+
+volumes:
+  postgres-data:
+  redis-data:

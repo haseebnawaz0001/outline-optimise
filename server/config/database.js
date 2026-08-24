@@ -15,9 +15,15 @@ module.exports = {
   production: {
     ...shared,
     dialectOptions: {
-      ssl: {
-        rejectUnauthorized: false,
-      },
+      // Matches the application behavior in server/storage/database.ts so
+      // that PGSSLMODE=disable also applies to migrations, e.g. when the
+      // database runs on a trusted private network without TLS.
+      ssl:
+        process.env.PGSSLMODE === "disable"
+          ? false
+          : {
+              rejectUnauthorized: false,
+            },
     },
   },
 };
