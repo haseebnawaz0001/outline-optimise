@@ -15885,7 +15885,7 @@ __metadata:
     prosemirror-history: "npm:^1.5.0"
     prosemirror-inputrules: "npm:^1.5.1"
     prosemirror-keymap: "npm:^1.2.3"
-    prosemirror-markdown: "npm:^1.13.4"
+    prosemirror-markdown: "npm:^1.13.6"
     prosemirror-model: "npm:^1.25.4"
     prosemirror-schema-list: "npm:^1.5.1"
     prosemirror-state: "npm:^1.4.4"
@@ -17141,14 +17141,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"prosemirror-markdown@npm:^1.13.4":
-  version: 1.13.4
-  resolution: "prosemirror-markdown@npm:1.13.4"
+"prosemirror-markdown@npm:^1.13.6":
+  version: 1.13.6
+  resolution: "prosemirror-markdown@npm:1.13.6"
   dependencies:
     "@types/markdown-it": "npm:^14.0.0"
     markdown-it: "npm:^14.0.0"
     prosemirror-model: "npm:^1.25.0"
-  checksum: 10c0/2776ec4822153886ead9cdaa0728ff5ab068f6693540294aa1b9f88f8f04191f10ac987d8a37dbc6ea8956d928458c9631e417f8da31afff5761711b97cbb4b2
+  checksum: 10c0/7accdbb0874672edf2b6e1e4720913f04a193474f72d0b6622cd2734bd30d14c4cc560ec468c1e23600656952ff50bc2b3e9fafcbee64847541c1ddd0e6b3c9a
   languageName: node
   linkType: hard
 
