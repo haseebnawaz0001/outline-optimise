@@ -1,0 +1,15 @@
+BOOT=200 in 13.540980337s
+== home_c8 conc=8 recorded
+== home_c16 conc=16 recorded
+== home_c32 conc=32 recorded
+== home_c48 conc=48 recorded
+== home_c64 conc=64 recorded
+== home_c96 conc=96 recorded
+== home_c128 conc=128 recorded
+== pgprobe_c64 conc=64 recorded
+LADDER DONE cpu
+boot_health=200
+after c160 health=200 restarts=0 false
+after c224 health=200 restarts=0 false
+after c288 health=200 restarts=0 false
+PUSH_DONE

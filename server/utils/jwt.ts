@@ -1,9 +1,90 @@
+import { createHash } from "crypto";
 import { subMinutes } from "date-fns";
 import JWT from "jsonwebtoken";
 import type { FindOptions } from "sequelize";
 import { Team, User } from "@server/models";
 import { AuthenticationError, UserSuspendedError } from "../errors";
 import type { Context } from "koa";
+
+/** How long a user resolved for a token may be reused without refetching. */
+const USER_CACHE_TTL_MS = 30_000;
+
+/** Maximum number of users kept in the per-process cache. */
+const USER_CACHE_MAX_ENTRIES = 1000;
+
+interface UserCacheEntry {
+  user: User;
+  expiresAt: number;
+}
+
+const userCache = new Map<string, UserCacheEntry>();
+
+/**
+ * Clears the in-process user cache populated by `getUserForJWT`. Intended for
+ * use in tests only.
+ */
+export function __resetUserCacheForTests(): void {
+  userCache.clear();
+}
+
+/**
+ * Returns a stable cache key for a raw token that does not retain the token
+ * itself in memory.
+ *
+ * @param token The raw JWT token as received from the caller.
+ * @returns The sha256 hex digest of the token.
+ */
+function cacheKeyForToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+/**
+ * Reads a user from the cache, treating expired entries as absent and
+ * refreshing recency of the entry so eviction approximates LRU.
+ *
+ * @param key The cache key for the token.
+ * @returns The cached user or undefined on a miss.
+ */
+function readCachedUser(key: string): User | undefined {
+  const entry = userCache.get(key);
+
+  if (!entry) {
+    return undefined;
+  }
+
+  if (entry.expiresAt <= Date.now()) {
+    userCache.delete(key);
+    return undefined;
+  }
+
+  userCache.delete(key);
+  userCache.set(key, entry);
+  return entry.user;
+}
+
+/**
+ * Writes a fully validated user to the cache, evicting the least recently
+ * used entry when the maximum number of entries is exceeded.
+ *
+ * @param key The cache key for the token.
+ * @param user The validated user to cache.
+ */
+function writeCachedUser(key: string, user: User): void {
+  while (userCache.size >= USER_CACHE_MAX_ENTRIES) {
+    const oldest = userCache.keys().next();
+
+    if (oldest.done) {
+      break;
+    }
+
+    userCache.delete(oldest.value);
+  }
+
+  userCache.set(key, {
+    user,
+    expiresAt: Date.now() + USER_CACHE_TTL_MS,
+  });
+}
 
 /**
  * Decodes a JWT token and returns its payload without verifying the
@@ -35,6 +116,13 @@ export function getJWTPayload(token: string) {
 /**
  * Retrieves the user associated with a JWT token, validating the token's type and expiration.
  *
+ * Results are cached in-process keyed on the raw token for `USER_CACHE_TTL_MS`
+ * (30 seconds), so suspension (user or team), secret rotation, and team
+ * deletion may take up to 30 seconds to be observed. Transfer tokens are never
+ * cached as their single-use semantics depend on a fresh `lastActiveAt`. The
+ * token signature is verified against the user's secret on every call,
+ * including cache hits.
+ *
  * @param token The JWT token to validate and extract the user from.
  * @param allowedTypes An array of allowed token types (default: ["session", "transfer"]). The token's type must be included in this array to be considered valid.
  * @returns An object containing the user associated with the token and an optional service string if included in the token's payload.
@@ -58,15 +146,24 @@ export async function getUserForJWT(
     }
   }
 
-  const user = await User.findByPk(payload.id, {
-    include: [
-      {
-        model: Team,
-        as: "team",
-        required: true,
-      },
-    ],
-  });
+  // Transfer tokens are single-use and their validity depends on an up-to-date
+  // `lastActiveAt`, so they bypass the cache entirely.
+  const cacheable = payload.type !== "transfer";
+  const key = cacheable ? cacheKeyForToken(token) : undefined;
+  const cachedUser = key ? readCachedUser(key) : undefined;
+
+  const user =
+    cachedUser ??
+    (await User.findByPk(payload.id, {
+      include: [
+        {
+          model: Team,
+          as: "team",
+          required: true,
+        },
+      ],
+    }));
+
   if (!user) {
     throw AuthenticationError("Invalid token");
   }
@@ -96,6 +193,11 @@ export async function getUserForJWT(
     JWT.verify(token, user.jwtSecret);
   } catch (_err) {
     throw AuthenticationError("Invalid token");
+  }
+
+  // Only fully validated users are cached; failures are refetched each time.
+  if (key && !cachedUser) {
+    writeCachedUser(key, user);
   }
 
   return {

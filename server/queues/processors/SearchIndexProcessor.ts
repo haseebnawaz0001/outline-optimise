@@ -1,4 +1,5 @@
 import { SearchableModel } from "@shared/types";
+import env from "@server/env";
 import { Document, Collection, Comment } from "@server/models";
 import BaseProcessor from "@server/queues/processors/BaseProcessor";
 import type {
@@ -33,6 +34,19 @@ export default class SearchIndexProcessor extends BaseProcessor {
     "comments.update",
     "comments.delete",
   ];
+
+  /**
+   * Determine whether an event should be queued at all. Under the built-in
+   * Postgres search provider indexing is handled by tsvector triggers, so
+   * queueing these events would only create empty jobs.
+   *
+   * @param event The event to check.
+   * @returns true if the event should be queued, false otherwise.
+   */
+  // oxlint-disable-next-line @typescript-eslint/no-unused-vars -- signature parity with BaseProcessor.shouldQueue
+  static async shouldQueue(event: Event): Promise<boolean> {
+    return env.SEARCH_PROVIDER !== "postgres";
+  }
 
   async perform(
     event: DocumentEvent | DocumentMovedEvent | CollectionEvent | CommentEvent

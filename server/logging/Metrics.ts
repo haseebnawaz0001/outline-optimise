@@ -1,44 +1,43 @@
-import { StatsD } from "hot-shots";
-import env from "@server/env";
-
+/**
+ * Metrics sink for application instrumentation.
+ *
+ * The StatsD sink has been removed; these methods remain as no-ops so
+ * existing call sites stay stable.
+ */
 class Metrics {
-  private client: StatsD;
+  /**
+   * Record a gauge value.
+   *
+   * @param key The metric name.
+   * @param value The metric value.
+   * @param tags Optional tags associated with the measurement.
+   */
+  gauge(_key: string, _value: number, _tags?: string[]): void {}
 
-  constructor() {
-    this.client = new StatsD({
-      prefix: "outline.",
-      globalTags: { env: process.env.DD_ENV ?? env.ENVIRONMENT },
-      errorHandler: () => {
-        // Silently ignore StatsD errors to avoid crashing the server
-      },
-    });
-  }
+  /**
+   * Record a gauge value tagged with the current instance identifier.
+   *
+   * @param key The metric name.
+   * @param value The metric value.
+   * @param tags Optional tags associated with the measurement.
+   */
+  gaugePerInstance(_key: string, _value: number, _tags: string[] = []): void {}
 
-  gauge(key: string, value: number, tags?: string[]): void {
-    this.client.gauge(key, value, tags);
-  }
+  /**
+   * Increment a counter.
+   *
+   * @param key The metric name.
+   * @param tags Optional tags associated with the increment.
+   */
+  increment(_key: string, _tags?: Record<string, string>): void {}
 
-  gaugePerInstance(key: string, value: number, tags: string[] = []): void {
-    const instanceId =
-      process.env.INSTANCE_ID || process.env.HEROKU_DYNO_ID || process.pid;
-
-    this.client.gauge(key, value, [...tags, `instance:${instanceId}`]);
-  }
-
-  increment(key: string, tags?: Record<string, string>): void {
-    const tagList = tags
-      ? Object.entries(tags).map(([k, v]) => `${k}:${v}`)
-      : undefined;
-
-    this.client.increment(key, 1, tagList);
-  }
-
+  /**
+   * Flush any pending metrics.
+   *
+   * @return A promise that resolves immediately.
+   */
   flush(): Promise<void> {
-    return new Promise<void>((resolve) => {
-      this.client.close(() => {
-        resolve();
-      });
-    });
+    return Promise.resolve();
   }
 }
 

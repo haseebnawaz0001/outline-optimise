@@ -1,0 +1,5 @@
+boot_health=200
+after c160 health=200 restarts=0 false
+after c224 health=200 restarts=0 false
+after c288 health=200 restarts=0 false
+PUSH_DONE

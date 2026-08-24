@@ -23,7 +23,7 @@
 import type { SpanOptions } from "dd-trace";
 import DDTags from "dd-trace/ext/tags";
 import env from "@server/env";
-import tracer from "./tracer";
+import tracer, { isApmEnabled } from "./tracer";
 import * as Tracing from "./tracer";
 
 type DDTag = (typeof DDTags)[keyof typeof DDTags];
@@ -66,7 +66,7 @@ export const traceFunction =
   >(
     target: F
   ): F =>
-    env.ENVIRONMENT === "test"
+    env.ENVIRONMENT === "test" || !isApmEnabled
       ? target
       : (function wrapperFn(this: unknown, ...args: P): R {
           const { className, methodName = target.name, tags } = config;

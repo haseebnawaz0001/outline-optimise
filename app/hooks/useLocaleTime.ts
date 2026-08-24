@@ -1,5 +1,5 @@
 import { format as formatDate } from "date-fns";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import type { locales } from "@shared/utils/date";
 import { dateLocale, dateToRelative } from "@shared/utils/date";
 import useUserLocale from "~/hooks/useUserLocale";
@@ -20,6 +20,12 @@ function eachMinute(fn: () => void) {
   };
 }
 
+const dateFormatLong: Record<string, string> = {
+  en_US: "MMMM do, yyyy h:mm a",
+  fr_FR: "'Le 'd MMMM yyyy 'à' H:mm",
+  de_DE: "d. MMMM yyyy 'um' H:mm",
+};
+
 export type Props = {
   dateTime: string;
   addSuffix?: boolean;
@@ -36,17 +42,14 @@ export const useLocaleTime = ({
   relative,
 }: Props) => {
   const userLocale = useUserLocale();
-  const dateFormatLong: Record<string, string> = {
-    en_US: "MMMM do, yyyy h:mm a",
-    fr_FR: "'Le 'd MMMM yyyy 'à' H:mm",
-    de_DE: "d. MMMM yyyy 'um' H:mm",
-  };
   const formatLocaleLong =
     (userLocale ? dateFormatLong[userLocale] : undefined) ??
     "MMMM do, yyyy h:mm a";
   // @ts-expect-error fallback to formatLocaleLong
   const formatLocale = format?.[userLocale] ?? formatLocaleLong;
-  const [, setMinutesMounted] = useState(0);
+  // The count of minutes since mount changes whenever the shared timer ticks,
+  // which keeps relative labels fresh without recomputing on other renders.
+  const [minutesMounted, setMinutesMounted] = useState(0);
   const callback = useRef<() => void>();
 
   useEffect(() => {
@@ -60,26 +63,40 @@ export const useLocaleTime = ({
     };
   }, []);
 
-  const date = new Date(Date.parse(dateTime));
-  const locale = dateLocale(userLocale);
-  const relativeContent = dateToRelative(date, {
+  return useMemo(() => {
+    const date = new Date(Date.parse(dateTime));
+    const locale = dateLocale(userLocale);
+    const relativeContent = dateToRelative(date, {
+      addSuffix,
+      locale,
+      shorten,
+    });
+
+    const tooltipContent = formatDate(date, formatLocaleLong, {
+      locale,
+    });
+    const content =
+      relative !== false
+        ? relativeContent
+        : formatDate(date, formatLocale, {
+            locale,
+          });
+
+    return {
+      content,
+      tooltipContent,
+    };
+    // minutesMounted is intentionally included: it advances on the shared
+    // minute tick so relative labels stay current.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    dateTime,
+    userLocale,
     addSuffix,
-    locale,
     shorten,
-  });
-
-  const tooltipContent = formatDate(date, formatLocaleLong, {
-    locale,
-  });
-  const content =
-    relative !== false
-      ? relativeContent
-      : formatDate(date, formatLocale, {
-          locale,
-        });
-
-  return {
-    content,
-    tooltipContent,
-  };
+    relative,
+    formatLocale,
+    formatLocaleLong,
+    minutesMounted,
+  ]);
 };

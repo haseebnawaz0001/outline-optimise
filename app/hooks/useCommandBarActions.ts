@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useRegisterActions } from "kbar";
 import { flattenDeep } from "es-toolkit/compat";
 import { useLocation } from "react-router-dom";
@@ -16,12 +17,15 @@ export default function useCommandBarActions(
   additionalDeps: React.DependencyList = []
 ) {
   const location = useLocation();
+  // The returned context is reference-stabilized by useActionContext, so this
+  // memo holds across renders unless the context or actions actually change.
   const context = useActionContext({
     isCommandBar: true,
   });
 
-  const registerable = flattenDeep(
-    actions.map((action) => actionToKBar(action, context))
+  const registerable = useMemo(
+    () => flattenDeep(actions.map((action) => actionToKBar(action, context))),
+    [actions, context]
   );
 
   useRegisterActions(registerable, [

@@ -88,7 +88,7 @@ export type MentionAttrs = {
 
 const pluginsWithSafeDecorations = new WeakSet<Plugin>();
 
-// jsdom does not implement ResizeObserver, and the exported document never
+// linkedom does not implement ResizeObserver, and the exported document never
 // resizes, so components that observe their element on mount get a no-op.
 class NoopResizeObserver implements ResizeObserver {
   public observe() {
@@ -629,6 +629,11 @@ export class ProsemirrorHelper extends SharedProsemirrorHelper {
     // a setTimeout fallback only when `window` is undefined at module load; if
     // loaded while jsdom globals are patched it binds a MessageChannel that
     // holds the event loop open.
+    //
+    // This site intentionally remains on jsdom rather than linkedom: mounting
+    // an EditorView with React node views depends on jsdom-specific DOM
+    // behaviors (notably serialization preserving attribute insertion order)
+    // that linkedom does not reproduce.
     const { JSDOM } = await import("jsdom");
     const { createNodeViews } = await import("../../editor/nodeViews");
 
@@ -787,7 +792,7 @@ export class ProsemirrorHelper extends SharedProsemirrorHelper {
 
         // Inject mermaidjs scripts if the document contains mermaid diagrams (supports both "mermaid" and "mermaidjs")
         if (options?.includeMermaid) {
-          const mermaidElements = dom.window.document.querySelectorAll(
+          const mermaidElements = doc.querySelectorAll(
             `[data-language="mermaid"] pre code, [data-language="mermaidjs"] pre code`
           );
 
@@ -893,7 +898,7 @@ export class ProsemirrorHelper extends SharedProsemirrorHelper {
    *
    * Errors thrown inside passive effects (as opposed to initial render) are
    * not caught by the node view's try/catch fallback — current components'
-   * effects are jsdom-safe.
+   * effects are safe under the headless DOM.
    *
    * @param turns The number of macrotask turns to yield.
    * @returns A promise that resolves once the turns have elapsed.
@@ -1118,14 +1123,50 @@ export class ProsemirrorHelper extends SharedProsemirrorHelper {
   }
 
   /**
-   * Patches the global environment with properties from the JSDOM window,
-   * necessary for ProseMirror to run in a Node environment.
+   * Patches the global environment with properties from the given DOM window
+   * (jsdom or linkedom), necessary for ProseMirror to run in a Node
+   * environment.
    *
-   * @param domWindow The JSDOM window object.
+   * @param domWindow The window object of a parsed document.
    * @returns A cleanup function to restore the global environment.
    */
-  public static patchGlobalEnv(domWindow: JSDOM["window"]) {
+  public static patchGlobalEnv(
+    domWindow: JSDOM["window"] | (Window & typeof globalThis)
+  ) {
     const g = global as unknown as Record<string, unknown>;
+
+    // Prosemirror-view resolves its DOM root by walking up to a document that
+    // implements getSelection, and linkedom documents do not implement it.
+    const doc = domWindow.document;
+    if (doc && !("getSelection" in doc)) {
+      try {
+        Object.defineProperty(doc, "getSelection", {
+          configurable: true,
+          value: () => null,
+        });
+      } catch (_err) {
+        // Ignore errors if property cannot be defined
+      }
+    }
+
+    // Components rendered into the headless document may write innerText,
+    // which linkedom elements do not implement. Map it onto textContent, the
+    // serialization is equivalent for static output.
+    const elementPrototype = domWindow.Element?.prototype;
+    if (
+      elementPrototype &&
+      !Object.getOwnPropertyDescriptor(elementPrototype, "innerText")?.set
+    ) {
+      Object.defineProperty(elementPrototype, "innerText", {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.textContent;
+        },
+        set(this: HTMLElement, value: string) {
+          this.textContent = value;
+        },
+      });
+    }
 
     const globalParams = {
       window: g.window,

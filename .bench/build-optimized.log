@@ -1,0 +1,70 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 1.84kB 0.0s done
+#1 DONE 0.1s
+
+#2 [internal] load metadata for docker.io/outlinewiki/outline-base:latest
+#2 ...
+
+#3 [internal] load metadata for docker.io/library/node:26.3.0-slim
+#3 DONE 1.9s
+
+#2 [internal] load metadata for docker.io/outlinewiki/outline-base:latest
+#2 DONE 2.2s
+
+#4 [internal] load .dockerignore
+#4 transferring context: 339B done
+#4 DONE 0.1s
+
+#5 [base 1/2] FROM docker.io/outlinewiki/outline-base:latest@sha256:e42174e53cbbe467e892be3a5d5f6782dd95fdd8feaaea17dbd238b4a11f3b1e
+#5 resolve docker.io/outlinewiki/outline-base:latest@sha256:e42174e53cbbe467e892be3a5d5f6782dd95fdd8feaaea17dbd238b4a11f3b1e 0.1s done
+#5 DONE 0.1s
+
+#6 [runner  1/11] FROM docker.io/library/node:26.3.0-slim@sha256:95a34da32a840bd9b3b09a5b773591c16923e350174b1c50e1200c75bf15eaa9
+#6 resolve docker.io/library/node:26.3.0-slim@sha256:95a34da32a840bd9b3b09a5b773591c16923e350174b1c50e1200c75bf15eaa9 0.1s done
+#6 DONE 0.1s
+
+#7 [runner  7/11] COPY --from=base --chown=nodejs:nodejs /opt/outline/.sequelizerc ./.sequelizerc
+#7 CACHED
+
+#8 [runner 10/11] RUN  apt-get update     && apt-get install -y wget     && rm -rf /var/lib/apt/lists/*
+#8 CACHED
+
+#9 [runner  9/11] COPY --from=base --chown=nodejs:nodejs /opt/outline/package.json ./package.json
+#9 CACHED
+
+#10 [runner  4/11] COPY --from=base --chown=nodejs:nodejs /opt/outline/build ./build
+#10 CACHED
+
+#11 [runner  2/11] WORKDIR /opt/outline
+#11 CACHED
+
+#12 [runner  8/11] COPY --from=base --chown=nodejs:nodejs /opt/outline/node_modules ./node_modules
+#12 CACHED
+
+#13 [runner  3/11] RUN addgroup --gid 1001 nodejs &&     adduser --uid 1001 --ingroup nodejs nodejs &&     mkdir -p /var/lib/outline &&     chown -R nodejs:nodejs /var/lib/outline &&     chown -R nodejs:nodejs /opt/outline
+#13 CACHED
+
+#14 [runner  6/11] COPY --from=base --chown=nodejs:nodejs /opt/outline/public ./public
+#14 CACHED
+
+#15 [base 2/2] WORKDIR /opt/outline
+#15 CACHED
+
+#16 [runner  5/11] COPY --from=base --chown=nodejs:nodejs /opt/outline/server ./server
+#16 CACHED
+
+#17 [runner 11/11] RUN mkdir -p "/var/lib/outline/data" &&     chown -R nodejs:nodejs "/var/lib/outline/data" &&     chmod 1777 "/var/lib/outline/data"
+#17 CACHED
+
+#18 exporting to image
+#18 exporting layers 0.0s done
+#18 exporting manifest sha256:fd16baf20e07d2a5bd496c83c3d0d80a44ef78ead308918bccc8f884c8e2ad35 done
+#18 exporting config sha256:6ecf4f0ced54939a89f253b9e5ac6c16ace4ebafb73e6fdb5b1fcf828502e074 done
+#18 exporting attestation manifest sha256:85bb885f6375caa0e780e5d12801ed1a06d07c0ebd3cbf24dfdfa1aeb4fecbbe 0.1s done
+#18 exporting manifest list sha256:d809b63cd09c1ed6f1f5975bc5060357a8f9d0caf880c1be4573f2dda02aca14
+#18 exporting manifest list sha256:d809b63cd09c1ed6f1f5975bc5060357a8f9d0caf880c1be4573f2dda02aca14 0.0s done
+#18 naming to docker.io/library/outline:optimized done
+#18 unpacking to docker.io/library/outline:optimized 0.0s done
+#18 DONE 0.3s

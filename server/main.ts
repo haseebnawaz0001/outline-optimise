@@ -24,7 +24,6 @@ import { redirectOnClient } from "./utils/redirectOnClient";
 import { RedisPrefixHelper } from "./utils/RedisPrefixHelper";
 import ShutdownHelper, { ShutdownOrder } from "./utils/ShutdownHelper";
 import { getSSLOptions } from "./utils/ssl";
-import { checkUpdates } from "./utils/updates";
 
 /**
  * Starts a single forked service process. This is where the heavy dependency
@@ -144,14 +143,6 @@ export async function start(id: number, disconnect: () => void) {
 
   server.listen(normalizedPort);
   server.setTimeout(env.REQUEST_TIMEOUT);
-
-  // Run telemetry from a single worker only. This keeps the supervising master
-  // process free of the models graph that the update check requires, while
-  // avoiding duplicate reporting when multiple workers are running.
-  if (id === 1 && env.TELEMETRY && env.isProduction) {
-    void checkUpdates();
-    setInterval(checkUpdates, 24 * 3600 * 1000).unref();
-  }
 
   ShutdownHelper.add(
     "server",

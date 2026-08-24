@@ -1,0 +1,22 @@
+{
+  "level": {
+    "path": "/",
+    "concurrency": 160,
+    "seconds": 40
+  },
+  "count": 6264,
+  "rps": 156.6,
+  "p50ms": 967.7,
+  "p90ms": 1120.7,
+  "p95ms": 1367.6,
+  "p99ms": 3226,
+  "maxMs": 6121,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 6264
+  }
+}

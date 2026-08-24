@@ -1,0 +1,231 @@
+{
+"home_c8": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 8,
+    "seconds": 45
+  },
+  "count": 3839,
+  "rps": 85.3,
+  "p50ms": 76.3,
+  "p90ms": 136.5,
+  "p95ms": 224.4,
+  "p99ms": 371.5,
+  "maxMs": 594.1,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 3839
+  }
+}, "health_after": "200", "state": "running oom=false restarts=0 exit=0"}
+,
+"home_c16": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 16,
+    "seconds": 45
+  },
+  "count": 4085,
+  "rps": 90.8,
+  "p50ms": 144.9,
+  "p90ms": 306.7,
+  "p95ms": 400.6,
+  "p99ms": 488.6,
+  "maxMs": 663.4,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 4085
+  }
+}, "health_after": "200", "state": "running oom=false restarts=0 exit=0"}
+,
+"home_c32": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 32,
+    "seconds": 45
+  },
+  "count": 4235,
+  "rps": 94.1,
+  "p50ms": 283.1,
+  "p90ms": 564.7,
+  "p95ms": 592,
+  "p99ms": 652.5,
+  "maxMs": 794,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 4235
+  }
+}, "health_after": "200", "state": "running oom=false restarts=0 exit=0"}
+,
+"home_c48": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 48,
+    "seconds": 45
+  },
+  "count": 4285,
+  "rps": 95.2,
+  "p50ms": 440.2,
+  "p90ms": 732.5,
+  "p95ms": 786.7,
+  "p99ms": 877.5,
+  "maxMs": 1335.2,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 4285
+  }
+}, "health_after": "200", "state": "running oom=false restarts=0 exit=0"}
+,
+"home_c64": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 64,
+    "seconds": 45
+  },
+  "count": 4581,
+  "rps": 101.8,
+  "p50ms": 606.2,
+  "p90ms": 827.2,
+  "p95ms": 854.8,
+  "p99ms": 1094.5,
+  "maxMs": 1435.9,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 4581
+  }
+}, "health_after": "200", "state": "running oom=false restarts=0 exit=0"}
+,
+"home_c96": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 96,
+    "seconds": 45
+  },
+  "count": 4664,
+  "rps": 103.6,
+  "p50ms": 971.3,
+  "p90ms": 1118.9,
+  "p95ms": 1180.8,
+  "p99ms": 1586.6,
+  "maxMs": 3950.3,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 4664
+  }
+}, "health_after": "200", "state": "running oom=false restarts=0 exit=0"}
+,
+"home_c128": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 128,
+    "seconds": 45
+  },
+  "count": 4892,
+  "rps": 108.7,
+  "p50ms": 1198.7,
+  "p90ms": 1288,
+  "p95ms": 1328.1,
+  "p99ms": 1655.8,
+  "maxMs": 3013.4,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 4892
+  }
+}, "health_after": "200", "state": "running oom=false restarts=0 exit=0"}
+,
+"push_c160": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 160,
+    "seconds": 40
+  },
+  "count": 4475,
+  "rps": 111.9,
+  "p50ms": 1418.2,
+  "p90ms": 1584.1,
+  "p95ms": 1687.8,
+  "p99ms": 4349.3,
+  "maxMs": 6458.5,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 4475
+  }
+}, "health_after": "200", "state": "running oom=false restarts=0 exit=0"}
+,
+"push_c224": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 224,
+    "seconds": 40
+  },
+  "count": 4139,
+  "rps": 103.5,
+  "p50ms": 2136.8,
+  "p90ms": 2499,
+  "p95ms": 2866.8,
+  "p99ms": 6348.5,
+  "maxMs": 8330.9,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 4139
+  }
+}, "health_after": "200", "state": "running oom=false restarts=0 exit=0"}
+,
+"push_c288": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 288,
+    "seconds": 40
+  },
+  "count": 4326,
+  "rps": 108.2,
+  "p50ms": 2528.8,
+  "p90ms": 3154.5,
+  "p95ms": 5477.9,
+  "p99ms": 8365.5,
+  "maxMs": 9954.1,
+  "errors": {
+    "timeout": 82,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 4326
+  }
+}, "health_after": "200", "state": "running oom=false restarts=0 exit=0"}
+}

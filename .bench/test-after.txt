@@ -1,0 +1,22 @@
+
+ RUN  v4.1.10 /home/haseeb/dev/outline
+
+(node:238328) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:241699) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:241883) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:245716) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+ Test Files  348 passed | 1 skipped (349)
+      Tests  4734 passed | 23 skipped (4757)
+   Start at  01:15:30
+   Duration  1138.36s (transform 74.46s, setup 2237.26s, import 393.26s, tests 504.18s, environment 99.65s)
+
+Sourcemap for "/home/haseeb/dev/outline/node_modules/prosemirror-codemark/dist/esm/index.js" points to missing source files
+Sourcemap for "/home/haseeb/dev/outline/node_modules/prosemirror-codemark/dist/esm/plugin.js" points to missing source files
+Sourcemap for "/home/haseeb/dev/outline/node_modules/prosemirror-codemark/dist/esm/utils.js" points to missing source files
+Sourcemap for "/home/haseeb/dev/outline/node_modules/prosemirror-codemark/dist/esm/inputRules.js" points to missing source files
+Sourcemap for "/home/haseeb/dev/outline/node_modules/prosemirror-codemark/dist/esm/actions.js" points to missing source files

@@ -55,6 +55,103 @@ interface AttachmentRef {
 }
 
 /**
+ * The bucket-normalization substitutions applied to an encoded attachment
+ * path, hoisted to module scope so they are compiled once per process.
+ */
+const UPLOADS_PREFIX_REGEX = new RegExp(`(.*)/${Buckets.uploads}/`);
+const PUBLIC_PREFIX_REGEX = new RegExp(`(.*)/${Buckets.public}/`);
+
+/**
+ * Compiled replacement patterns for a single attachment's path variants.
+ * All regular expressions are global; reuse with `String.replace` is safe
+ * because it resets `lastIndex` around every call.
+ */
+interface CompiledAttachmentPatterns {
+  /** Matches the full encoded zip path. */
+  encodedPathRegExp: RegExp;
+  /** Matches the legacy-bucket-normalized encoded path, with optional leading "./" or "/". */
+  normalizedPathRegExp: RegExp;
+  /** Matches the encoded path relative to the nearest "attachments/" folder, when present. */
+  relativeFromAttachmentsRegExp?: RegExp;
+  /** Matches "<parent folder>/<encoded filename>", with optional leading "./" or "/". */
+  genericPathRegExp: RegExp;
+}
+
+/**
+ * Upper bound on cached attachment path patterns. Imports exceeding this
+ * simply recompile patterns (behavior never changes), keeping worker memory
+ * bounded across many imports.
+ */
+const COMPILED_PATTERN_CACHE_LIMIT = 1000;
+
+/**
+ * Module-level cache of compiled replacement patterns keyed by
+ * `pathInZip`, so each attachment's regexes are compiled once per process
+ * and reused across all pages of an import.
+ */
+const compiledAttachmentPatterns = new Map<
+  string,
+  CompiledAttachmentPatterns
+>();
+
+/**
+ * Returns the compiled replacement patterns for an attachment path,
+ * compiling and caching them on first use.
+ *
+ * @param pathInZip Verbatim path of the attachment inside the archive.
+ * @returns The compiled global regular expressions for this path.
+ */
+function getCompiledAttachmentPatterns(
+  pathInZip: string
+): CompiledAttachmentPatterns {
+  const cached = compiledAttachmentPatterns.get(pathInZip);
+  if (cached) {
+    return cached;
+  }
+
+  const encodedPath = encodeURI(pathInZip);
+  const attachmentFileName = path.basename(pathInZip);
+  const attachmentDir = path.basename(path.dirname(pathInZip));
+  const segments = pathInZip.split(path.sep);
+  const attachmentsIdx = segments.findIndex(
+    (seg) => seg.toLowerCase() === "attachments"
+  );
+
+  const compiled: CompiledAttachmentPatterns = {
+    encodedPathRegExp: new RegExp(escapeRegExp(encodedPath), "g"),
+    normalizedPathRegExp: new RegExp(
+      `\\.?/?${escapeRegExp(
+        encodedPath
+          .replace(UPLOADS_PREFIX_REGEX, `${Buckets.uploads}/`)
+          .replace(PUBLIC_PREFIX_REGEX, `${Buckets.public}/`)
+      )}`,
+      "g"
+    ),
+    ...(attachmentsIdx >= 0
+      ? {
+          relativeFromAttachmentsRegExp: new RegExp(
+            `\\.?/?${escapeRegExp(
+              encodeURI(segments.slice(attachmentsIdx).join("/"))
+            )}`,
+            "g"
+          ),
+        }
+      : {}),
+    genericPathRegExp: new RegExp(
+      `\\.?/?${escapeRegExp(`${attachmentDir}/${encodeURI(attachmentFileName)}`)}`,
+      "g"
+    ),
+  };
+
+  if (compiledAttachmentPatterns.size >= COMPILED_PATTERN_CACHE_LIMIT) {
+    compiledAttachmentPatterns.clear();
+  }
+  compiledAttachmentPatterns.set(pathInZip, compiled);
+
+  return compiled;
+}
+
+/**
  * Rewrites local attachment paths in markdown text into `<<attachmentId>>`
  * placeholders. Supports legacy bucket layouts (`uploads/`, `public/`),
  * arbitrary nested folder names, and `./attachments/...` rooted paths. Both
@@ -73,43 +170,117 @@ export function rewriteAttachmentPaths(
   let text = markdown;
 
   for (const attachment of attachments) {
-    const encodedPath = encodeURI(attachment.pathInZip);
-    const attachmentFileName = path.basename(attachment.pathInZip);
     const reference = `<<${attachment.id}>>`;
-
-    const normalizedAttachmentPath = encodedPath
-      .replace(new RegExp(`(.*)/${Buckets.uploads}/`), `${Buckets.uploads}/`)
-      .replace(new RegExp(`(.*)/${Buckets.public}/`), `${Buckets.public}/`);
-
-    const attachmentDir = path.basename(path.dirname(attachment.pathInZip));
-    const genericNormalizedPath = `${attachmentDir}/${encodeURI(attachmentFileName)}`;
+    const patterns = getCompiledAttachmentPatterns(attachment.pathInZip);
 
     text = text
-      .replace(new RegExp(escapeRegExp(encodedPath), "g"), reference)
-      .replace(
-        new RegExp(`\\.?/?${escapeRegExp(normalizedAttachmentPath)}`, "g"),
-        reference
-      );
+      .replace(patterns.encodedPathRegExp, reference)
+      .replace(patterns.normalizedPathRegExp, reference);
 
-    const segments = attachment.pathInZip.split(path.sep);
-    const attachmentsIdx = segments.findIndex(
-      (seg) => seg.toLowerCase() === "attachments"
-    );
-    if (attachmentsIdx >= 0) {
-      const relFromAttachments = segments.slice(attachmentsIdx).join("/");
-      text = text.replace(
-        new RegExp(`\\.?/?${escapeRegExp(encodeURI(relFromAttachments))}`, "g"),
-        reference
-      );
+    if (patterns.relativeFromAttachmentsRegExp) {
+      text = text.replace(patterns.relativeFromAttachmentsRegExp, reference);
     }
 
-    text = text.replace(
-      new RegExp(`\\.?/?${escapeRegExp(genericNormalizedPath)}`, "g"),
-      reference
-    );
+    text = text.replace(patterns.genericPathRegExp, reference);
   }
 
   return text;
+}
+
+/**
+ * An inverted index over an attachment manifest for fast per-page reference
+ * lookups. Mirrors the semantics of filtering the manifest with
+ * `markdown.includes(basename) || markdown.includes(encodeURI(basename))`:
+ * matching is case-sensitive and overlapping filenames are all detected.
+ *
+ * Exported for tests; not part of the module's public surface.
+ */
+export class AttachmentReferenceIndex {
+  private readonly manifest: MarkdownAttachmentManifestItem[];
+
+  private readonly manifestIndexesByName = new Map<string, number[]>();
+
+  /** Manifest entries with an empty basename; `includes("")` is always true. */
+  private readonly emptyBasenameIndexes: number[] = [];
+
+  /**
+   * Single case-sensitive alternation matcher over every filename variant,
+   * wrapped in a lookahead so zero-width matches report all overlapping
+   * occurrences in one pass.
+   */
+  private readonly matcher: RegExp | null;
+
+  constructor(manifest: MarkdownAttachmentManifestItem[]) {
+    this.manifest = manifest;
+    const alternatives = new Set<string>();
+
+    manifest.forEach((item, index) => {
+      const fileName = path.basename(item.pathInZip);
+      if (!fileName) {
+        this.emptyBasenameIndexes.push(index);
+        return;
+      }
+      this.addReference(fileName, index);
+      alternatives.add(fileName);
+
+      const encodedFileName = encodeURI(fileName);
+      if (encodedFileName !== fileName) {
+        this.addReference(encodedFileName, index);
+        alternatives.add(encodedFileName);
+      }
+    });
+
+    this.matcher = alternatives.size
+      ? new RegExp(
+          `(?=(${Array.from(alternatives).map(escapeRegExp).join("|")}))`,
+          "g"
+        )
+      : null;
+  }
+
+  /**
+   * Returns the subset of the manifest referenced anywhere in the given
+   * markdown text, preserving manifest order.
+   *
+   * @param markdown Raw markdown text for a single document.
+   * @returns Manifest entries that appear (by filename) in the markdown.
+   */
+  referencedBy(markdown: string): MarkdownAttachmentManifestItem[] {
+    const matched = new Set<number>(this.emptyBasenameIndexes);
+
+    if (this.matcher && markdown) {
+      this.matcher.lastIndex = 0;
+      for (const match of markdown.matchAll(this.matcher)) {
+        const indexes = match[1]
+          ? this.manifestIndexesByName.get(match[1])
+          : undefined;
+        if (indexes) {
+          for (const index of indexes) {
+            matched.add(index);
+          }
+        }
+      }
+    }
+
+    return Array.from(matched)
+      .sort((a, b) => a - b)
+      .map((index) => this.manifest[index]);
+  }
+
+  /**
+   * Records a manifest index under a filename variant in the inverted index.
+   *
+   * @param name The filename (or encoded filename) to index.
+   * @param index The manifest position of the referencing entry.
+   */
+  private addReference(name: string, index: number): void {
+    let indexes = this.manifestIndexesByName.get(name);
+    if (!indexes) {
+      indexes = [];
+      this.manifestIndexesByName.set(name, indexes);
+    }
+    indexes.push(index);
+  }
 }
 
 /**
@@ -376,6 +547,11 @@ export default class MarkdownAPIImportTask extends APIImportTask<Markdown> {
       associatedImport.scratch = { storageKey, manifest, docMap };
       await associatedImport.save();
 
+      // Inverted index over the finalized manifest so each page's reference
+      // lookup is a single scan of its markdown rather than a filter over
+      // the whole manifest.
+      const attachmentIndex = new AttachmentReferenceIndex(manifest);
+
       // Append collection placeholder items so ImportsProcessor iterates
       // them during the bootstrap row (the earliest createdAt) — that
       // guarantees collections land in the DB before any per-page document
@@ -405,7 +581,7 @@ export default class MarkdownAPIImportTask extends APIImportTask<Markdown> {
       // depth-ordered cascade of ImportTask rows so parent FKs are always
       // satisfied at child-doc creation time.
       const childTasksInput: ImportTaskInput<Markdown> = collections.flatMap(
-        (c) => c.children.map((d) => this.toPageInput(d, manifest))
+        (c) => c.children.map((d) => this.toPageInput(d, attachmentIndex))
       );
 
       return { taskOutput: collectionOutputs, childTasksInput };
@@ -420,12 +596,13 @@ export default class MarkdownAPIImportTask extends APIImportTask<Markdown> {
    * each tree-depth runs as its own task wave.
    *
    * @param doc The discovered document, including its descendants.
-   * @param manifest The full attachment manifest (used for per-page refs).
+   * @param attachmentIndex Inverted index over the full manifest, used to
+   *                        resolve per-page attachment references.
    * @returns A self-contained per-page task input.
    */
   private toPageInput(
     doc: DiscoveredDocument,
-    manifest: MarkdownAttachmentManifestItem[]
+    attachmentIndex: AttachmentReferenceIndex
   ): MarkdownPageImportTaskInputItem {
     return {
       externalId: doc.id,
@@ -434,9 +611,9 @@ export default class MarkdownAPIImportTask extends APIImportTask<Markdown> {
       title: doc.title,
       path: doc.pathInZip,
       markdownText: doc.markdownText,
-      attachmentMap: this.attachmentsReferencedBy(doc.markdownText, manifest),
+      attachmentMap: attachmentIndex.referencedBy(doc.markdownText),
       children: doc.children.length
-        ? doc.children.map((c) => this.toPageInput(c, manifest))
+        ? doc.children.map((c) => this.toPageInput(c, attachmentIndex))
         : undefined,
     };
   }
@@ -536,26 +713,6 @@ export default class MarkdownAPIImportTask extends APIImportTask<Markdown> {
     );
 
     return text;
-  }
-
-  /**
-   * Returns the subset of the full manifest that is referenced anywhere in
-   * the given markdown text. Used to bound the per-page task input size.
-   *
-   * @param markdown Raw markdown text for a single document.
-   * @param manifest The full attachment manifest from the bootstrap phase.
-   * @returns Manifest entries that appear (by filename) in the markdown.
-   */
-  private attachmentsReferencedBy(
-    markdown: string,
-    manifest: MarkdownAttachmentManifestItem[]
-  ): MarkdownAttachmentManifestItem[] {
-    return manifest.filter((item) => {
-      const fileName = path.basename(item.pathInZip);
-      return (
-        markdown.includes(fileName) || markdown.includes(encodeURI(fileName))
-      );
-    });
   }
 
   /**

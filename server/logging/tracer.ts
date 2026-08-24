@@ -34,12 +34,17 @@ const noopSpan = {
 
 let tracer: Tracer;
 
+/**
+ * Whether APM tracing is enabled for this process. True only when a DataDog
+ * agent key is configured and the process is a cluster worker; the throng
+ * master supervises forked workers and never serves traffic.
+ */
+export const isApmEnabled = Boolean(env.DD_API_KEY) && cluster.isWorker;
+
 // If the DataDog agent is installed and the DD_API_KEY environment variable is
 // in the environment then we can safely attempt to start the DD tracer. This
 // must happen before any instrumented module is imported.
-// Note: the tracer is only loaded in worker processes. The throng master
-// supervises forked workers and never serves traffic.
-if (env.DD_API_KEY && cluster.isWorker) {
+if (isApmEnabled) {
   // oxlint-disable-next-line typescript/no-require-imports -- kept lazy so dd-trace stays off the startup path
   const ddTrace = require("dd-trace") as { default?: Tracer };
   tracer = ddTrace.default ?? (ddTrace as unknown as Tracer);

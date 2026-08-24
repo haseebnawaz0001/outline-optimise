@@ -1,0 +1,12 @@
+BOOT=200 in {"tag":"outline:cpu24","bootS":16.097484919}
+== home_c8 conc=8 done: health=200 state=running oom=false restarts=0 exit=0
+== home_c16 conc=16 done: health=200 state=running oom=false restarts=0 exit=0
+== home_c32 conc=32 done: health=200 state=running oom=false restarts=0 exit=0
+== home_c48 conc=48 done: health=200 state=running oom=false restarts=0 exit=0
+== home_c64 conc=64 done: health=200 state=running oom=false restarts=0 exit=0
+== home_c96 conc=96 done: health=200 state=running oom=false restarts=0 exit=0
+== home_c128 conc=128 done: health=200 state=running oom=false restarts=0 exit=0
+== push_c160 conc=160 done: health=200 state=running oom=false restarts=0 exit=0
+== push_c224 conc=224 done: health=200 state=running oom=false restarts=0 exit=0
+== push_c288 conc=288 done: health=200 state=running oom=false restarts=0 exit=0
+LADDER-MEM DONE cpucap

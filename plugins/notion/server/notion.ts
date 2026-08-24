@@ -1,10 +1,7 @@
-import {
+import type {
   APIErrorCode,
   APIResponseError,
   Client,
-  isFullPage,
-  isFullPageOrDatabase,
-  isFullUser,
   RequestTimeoutError,
   UnknownHTTPResponseError,
 } from "@notionhq/client";
@@ -12,7 +9,12 @@ import type {
   BlockObjectResponse,
   DatabaseObjectResponse,
   PageObjectResponse,
+  PartialBlockObjectResponse,
+  PartialDatabaseObjectResponse,
+  PartialPageObjectResponse,
+  PartialUserObjectResponse,
   RichTextItemResponse,
+  UserObjectResponse,
 } from "@notionhq/client/build/src/api-endpoints";
 import { RateLimit } from "async-sema";
 import emojiRegex from "emoji-regex";
@@ -39,6 +41,43 @@ const Credentials = Buffer.from(
   `${env.NOTION_CLIENT_ID}:${env.NOTION_CLIENT_SECRET}`
 ).toString("base64");
 
+/**
+ * The parts of the dynamically imported "@notionhq/client" module that this
+ * file uses.
+ */
+interface NotionSdkModule {
+  Client: new (options?: { auth?: string }) => Client;
+  APIResponseError: new (...args: never[]) => APIResponseError;
+  RequestTimeoutError: new (...args: never[]) => RequestTimeoutError;
+  UnknownHTTPResponseError: new (...args: never[]) => UnknownHTTPResponseError;
+  APIErrorCode: {
+    RateLimited: APIErrorCode.RateLimited;
+    ObjectNotFound: APIErrorCode.ObjectNotFound;
+    Unauthorized: APIErrorCode.Unauthorized;
+  };
+  isFullPage: (
+    response:
+      | BlockObjectResponse
+      | PageObjectResponse
+      | PartialPageObjectResponse
+      | DatabaseObjectResponse
+      | PartialDatabaseObjectResponse
+      | PartialBlockObjectResponse
+  ) => response is PageObjectResponse;
+  isFullPageOrDatabase: (
+    response:
+      | BlockObjectResponse
+      | PageObjectResponse
+      | PartialPageObjectResponse
+      | DatabaseObjectResponse
+      | PartialDatabaseObjectResponse
+      | PartialBlockObjectResponse
+  ) => response is PageObjectResponse | DatabaseObjectResponse;
+  isFullUser: (
+    user: UserObjectResponse | PartialUserObjectResponse
+  ) => user is UserObjectResponse;
+}
+
 const AccessTokenResponseSchema = z.object({
   access_token: z.string(),
   bot_id: z.string(),
@@ -57,7 +96,23 @@ const AccessTokenResponseSchema = z.object({
 });
 
 export class NotionClient {
-  private client: Client;
+  /** Memoized module import, resolved once per process. */
+  private static sdk?: Promise<NotionSdkModule>;
+
+  /**
+   * Lazily loads the Notion SDK so requiring this module at boot does not pull
+   * its module graph into every process. The import promise is cached so
+   * repeated requests never re-import.
+   */
+  private static loadSdk(): Promise<NotionSdkModule> {
+    if (!NotionClient.sdk) {
+      NotionClient.sdk = import("@notionhq/client");
+    }
+    return NotionClient.sdk;
+  }
+
+  private client?: Client;
+  private readonly accessToken: string;
   private limiter: ReturnType<typeof RateLimit>;
   private pageSize = 100;
   private maxRetries = 3;
@@ -77,9 +132,7 @@ export class NotionClient {
     },
     options: { maxRetries?: number; retryDelay?: number } = {}
   ) {
-    this.client = new Client({
-      auth: accessToken,
-    });
+    this.accessToken = accessToken;
     this.limiter = RateLimit(rateLimit.limit, {
       timeUnit: rateLimit.window,
       uniformDistribution: true,
@@ -89,12 +142,33 @@ export class NotionClient {
   }
 
   /**
+   * Returns the Notion API client, constructing it on first use so that SDK
+   * construction is deferred out of the constructor.
+   *
+   * @returns A configured Notion API client.
+   */
+  private async getClient(): Promise<Client> {
+    if (!this.client) {
+      const { Client } = await NotionClient.loadSdk();
+      this.client = new Client({ auth: this.accessToken });
+    }
+    return this.client;
+  }
+
+  /**
    * Executes an API call with automatic retry on rate limiting errors
    *
    * @param apiCall The async function that makes the Notion API call
    * @returns The result of the API call
    */
   private async fetchWithRetry<T>(apiCall: () => Promise<T>): Promise<T> {
+    const {
+      APIResponseError,
+      APIErrorCode,
+      RequestTimeoutError,
+      UnknownHTTPResponseError,
+    } = await NotionClient.loadSdk();
+
     let retries = 0;
     let serverErrorRetries = 0;
 
@@ -206,6 +280,9 @@ export class NotionClient {
   }
 
   async fetchRootPages() {
+    const { isFullPageOrDatabase } = await NotionClient.loadSdk();
+    const client = await this.getClient();
+
     const pages: Page[] = [];
 
     let cursor: string | undefined;
@@ -213,7 +290,7 @@ export class NotionClient {
 
     while (hasMore) {
       const response = await this.fetchWithRetry(() =>
-        this.client.search({
+        client.search({
           start_cursor: cursor,
           page_size: this.pageSize,
         })
@@ -264,6 +341,9 @@ export class NotionClient {
   }
 
   private async fetchBlockChildren(blockId: string) {
+    const { APIResponseError, APIErrorCode } = await NotionClient.loadSdk();
+    const client = await this.getClient();
+
     const blocks: Block[] = [];
 
     let cursor: string | undefined;
@@ -272,7 +352,7 @@ export class NotionClient {
     try {
       while (hasMore) {
         const response = await this.fetchWithRetry(() =>
-          this.client.blocks.children.list({
+          client.blocks.children.list({
             block_id: blockId,
             start_cursor: cursor,
             page_size: this.pageSize,
@@ -313,6 +393,10 @@ export class NotionClient {
   }
 
   private async queryDatabase(databaseId: string) {
+    const { APIResponseError, APIErrorCode, isFullPage } =
+      await NotionClient.loadSdk();
+    const client = await this.getClient();
+
     const pages: Page[] = [];
 
     let cursor: string | undefined;
@@ -321,7 +405,7 @@ export class NotionClient {
     try {
       while (hasMore) {
         const response = await this.fetchWithRetry(() =>
-          this.client.databases.query({
+          client.databases.query({
             database_id: databaseId,
             filter_properties: ["title"],
             start_cursor: cursor,
@@ -372,8 +456,9 @@ export class NotionClient {
     pageId: string,
     { titleMaxLength }: { titleMaxLength: number }
   ): Promise<PageInfo> {
+    const client = await this.getClient();
     const page = (await this.fetchWithRetry(() =>
-      this.client.pages.retrieve({
+      client.pages.retrieve({
         page_id: pageId,
       })
     )) as PageObjectResponse;
@@ -397,8 +482,9 @@ export class NotionClient {
     databaseId: string,
     { titleMaxLength }: { titleMaxLength: number }
   ): Promise<PageInfo> {
+    const client = await this.getClient();
     const database = (await this.fetchWithRetry(() =>
-      this.client.databases.retrieve({
+      client.databases.retrieve({
         database_id: databaseId,
       })
     )) as DatabaseObjectResponse;
@@ -421,9 +507,13 @@ export class NotionClient {
   }
 
   private async fetchUsername(userId: string) {
+    const { APIResponseError, APIErrorCode, isFullUser } =
+      await NotionClient.loadSdk();
+    const client = await this.getClient();
+
     try {
       const user = await this.fetchWithRetry(() =>
-        this.client.users.retrieve({ user_id: userId })
+        client.users.retrieve({ user_id: userId })
       );
 
       if (user.type === "person" || !user.bot.owner) {

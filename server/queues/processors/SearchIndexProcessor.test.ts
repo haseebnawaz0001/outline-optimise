@@ -1,4 +1,5 @@
 import { SearchableModel } from "@shared/types";
+import env from "@server/env";
 import {
   buildDocument,
   buildCollection,
@@ -27,6 +28,33 @@ describe("SearchIndexProcessor", () => {
     );
     expect(SearchIndexProcessor.applicableEvents).toContain("comments.create");
     expect(SearchIndexProcessor.applicableEvents).toContain("comments.delete");
+  });
+
+  describe("shouldQueue", () => {
+    const originalProvider = env.SEARCH_PROVIDER;
+    const event = {
+      name: "documents.publish",
+      documentId: "doc-id",
+      collectionId: "collection-id",
+      teamId: "team-id",
+      actorId: "user-id",
+    } as PerformArg;
+
+    afterEach(() => {
+      env.SEARCH_PROVIDER = originalProvider;
+    });
+
+    it("should return false when SEARCH_PROVIDER is postgres", async () => {
+      env.SEARCH_PROVIDER = "postgres";
+
+      expect(await SearchIndexProcessor.shouldQueue(event)).toBe(false);
+    });
+
+    it("should return true for external providers", async () => {
+      env.SEARCH_PROVIDER = "elasticsearch";
+
+      expect(await SearchIndexProcessor.shouldQueue(event)).toBe(true);
+    });
   });
 
   it("should call provider.index for documents.publish", async () => {

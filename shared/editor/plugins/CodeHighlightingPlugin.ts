@@ -13,7 +13,46 @@ type ParsedNode = {
   classes: string[];
 };
 
-const cache: Record<number, { node: Node; decorations: Decoration[] }> = {};
+/**
+ * A decoration stored relative to the start of its code block so cached
+ * entries survive the block moving to a different position.
+ */
+type RelativeDecoration =
+  | {
+      type: "inline";
+      from: number;
+      to: number;
+      className: string;
+    }
+  | {
+      type: "node";
+      from: number;
+      to: number;
+      attrs: {
+        "data-line-numbers": string;
+        style: string;
+      };
+      spec: { key: string };
+    };
+
+interface HighlightCacheEntry {
+  /** The language attribute of the cached block. */
+  language: string;
+  /**
+   * Whether syntax highlighting was applied. Entries created while the
+   * language was still loading are rebuilt once it registers.
+   */
+  highlighted: boolean;
+  /** Decorations relative to the start of their code block. */
+  decorations: RelativeDecoration[];
+}
+
+/**
+ * Cache keyed by node identity rather than position: ProseMirror nodes are
+ * immutable, so untouched blocks keep their identity across position shifts
+ * caused by edits elsewhere in the document.
+ */
+const cache = new WeakMap<Node, HighlightCacheEntry>();
 const languagesToImport = new Set<string>();
 const languagePromises: Record<
   string,
@@ -22,8 +61,12 @@ const languagePromises: Record<
 
 let refractor: typeof refractorType | undefined;
 
-/** Lazily load refractor core. */
-async function getRefractor() {
+/**
+ * Lazily load refractor core, memoizing the instance for highlighting.
+ *
+ * @returns The loaded refractor core module.
+ */
+export async function getRefractor() {
   refractor ??= (await import("refractor/core")).default;
   return refractor;
 }
@@ -60,6 +103,36 @@ async function loadLanguage(language: string) {
     });
 
   return languagePromises[language];
+}
+
+/**
+ * Rebuilds an absolute decoration from a cached relative one at a block's
+ * current position.
+ *
+ * @param decoration The relative decoration to materialize.
+ * @param blockPos Current absolute position of the code block.
+ * @returns The absolute decoration.
+ */
+function materializeDecoration(
+  decoration: RelativeDecoration,
+  blockPos: number
+): Decoration {
+  if (decoration.type === "node") {
+    return Decoration.node(
+      blockPos + decoration.from,
+      blockPos + decoration.to,
+      decoration.attrs,
+      decoration.spec
+    );
+  }
+
+  return Decoration.inline(
+    blockPos + decoration.from,
+    blockPos + decoration.to,
+    {
+      class: decoration.className,
+    }
+  );
 }
 
 function getDecorations({
@@ -103,12 +176,18 @@ function getDecorations({
   }
 
   blocks.forEach((block) => {
-    let startPos = block.pos + 1;
-    const language = block.node.attrs.language;
+    const language: string = block.node.attrs.language;
     const lang = getRefractorLangForLanguage(language);
-    const lineDecorations = [];
+    const langReady = !!lang && !!refractor?.registered(lang);
 
-    if (!cache[block.pos] || !cache[block.pos].node.eq(block.node)) {
+    let entry = cache.get(block.node);
+
+    // Cache misses are keyed on node identity: an untouched block keeps its
+    // entry even after upstream edits shift its position. An entry created
+    // while the block's language was still loading is rebuilt once loaded.
+    if (!entry || (langReady && !entry.highlighted)) {
+      const relativeDecorations: RelativeDecoration[] = [];
+
       if (lineNumbers && !block.node.attrs.wrap) {
         const lineCount =
           (block.node.textContent.match(/\n/g) || []).length + 1;
@@ -118,33 +197,33 @@ function getDecorations({
           .map((_, i) => padStart(`${i + 1}`, gutterWidth, " "))
           .join("\n");
 
-        lineDecorations.push(
-          Decoration.node(
-            block.pos,
-            block.pos + block.node.nodeSize,
-            {
-              "data-line-numbers": `${lineCountText}`,
-              style: `--line-number-gutter-width: ${gutterWidth};`,
-            },
-            {
-              key: `line-${lineCount}-gutter`,
-            }
-          )
-        );
+        relativeDecorations.push({
+          type: "node",
+          from: 0,
+          to: block.node.nodeSize,
+          attrs: {
+            "data-line-numbers": lineCountText,
+            style: `--line-number-gutter-width: ${gutterWidth};`,
+          },
+          spec: {
+            key: `line-${lineCount}-gutter`,
+          },
+        });
       }
-
-      cache[block.pos] = {
-        node: block.node,
-        decorations: lineDecorations,
-      };
 
       if (!lang) {
         // do nothing
-      } else if (refractor?.registered(lang)) {
+        entry = {
+          language,
+          highlighted: true,
+          decorations: relativeDecorations,
+        };
+      } else if (langReady) {
         languagesToImport.delete(language);
 
         const nodes = refractor!.highlight(block.node.textContent, lang);
-        const newDecorations = parseNodes(nodes)
+        let startPos = 1;
+        const inlineDecorations = parseNodes(nodes)
           .map((node: ParsedNode) => {
             const from = startPos;
             const to = from + node.text.length;
@@ -158,32 +237,36 @@ function getDecorations({
             };
           })
           .filter((node) => node.classes && node.classes.length)
-          .map((node) =>
-            Decoration.inline(node.from, node.to, {
-              class: node.classes.join(" "),
+          .map(
+            (node): RelativeDecoration => ({
+              type: "inline",
+              from: node.from,
+              to: node.to,
+              className: node.classes.join(" "),
             })
-          )
-          .concat(lineDecorations);
+          );
 
-        cache[block.pos] = {
-          node: block.node,
-          decorations: newDecorations,
+        entry = {
+          language,
+          highlighted: true,
+          decorations: [...inlineDecorations, ...relativeDecorations],
         };
       } else {
         languagesToImport.add(language);
+        entry = {
+          language,
+          highlighted: false,
+          decorations: relativeDecorations,
+        };
       }
+
+      cache.set(block.node, entry);
     }
 
-    cache[block.pos]?.decorations.forEach((decoration) => {
-      decorations.push(decoration);
+    entry.decorations.forEach((decoration) => {
+      decorations.push(materializeDecoration(decoration, block.pos));
     });
   });
-
-  Object.keys(cache)
-    .filter((pos) => !blocks.find((block) => block.pos === Number(pos)))
-    .forEach((pos) => {
-      delete cache[Number(pos)];
-    });
 
   return DecorationSet.create(doc, decorations);
 }
@@ -220,16 +303,6 @@ export function CodeHighlighting({
           langLoaded ||
           isRemoteTransaction(transaction)
         ) {
-          // Invalidate cached entries for blocks whose language just loaded
-          // so getDecorations rebuilds them with syntax highlighting applied.
-          if (Array.isArray(langLoaded)) {
-            for (const key of Object.keys(cache)) {
-              const pos = Number(key);
-              if (langLoaded.includes(cache[pos]?.node.attrs.language)) {
-                delete cache[pos];
-              }
-            }
-          }
           highlighted = true;
           return getDecorations({ doc: transaction.doc, name, lineNumbers });
         }

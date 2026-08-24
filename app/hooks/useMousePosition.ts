@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import useEventListener from "./useEventListener";
 
 /**
@@ -13,10 +13,33 @@ type MousePosition = [number, number];
  */
 export const useMousePosition = () => {
   const [mousePosition, setMousePosition] = useState<MousePosition>([0, 0]);
+  // The latest observed coordinates; mousemove events are coalesced so at most
+  // one state update happens per animation frame.
+  const position = useRef<MousePosition>([0, 0]);
+  const frame = useRef<number>();
 
   const updateMousePosition = useMemo(
     () => (ev: MouseEvent) => {
-      setMousePosition([ev.clientX, ev.clientY]);
+      position.current = [ev.clientX, ev.clientY];
+
+      if (frame.current !== undefined) {
+        return;
+      }
+
+      frame.current = requestAnimationFrame(() => {
+        frame.current = undefined;
+        setMousePosition(position.current);
+      });
+    },
+    []
+  );
+
+  useEffect(
+    () => () => {
+      if (frame.current !== undefined) {
+        cancelAnimationFrame(frame.current);
+        frame.current = undefined;
+      }
     },
     []
   );

@@ -12,8 +12,11 @@ import {
   configureChildHeapLimit,
 } from "./utils/startup";
 
-// The number of processes to run, defaults to the number of CPU's available
-// for the web service, and 1 for collaboration unless REDIS_COLLABORATION_URL is set.
+const DEFAULT_MAX_WEB_PROCESSES = 4;
+
+// The number of processes to run, defaults to the lesser of
+// DEFAULT_MAX_WEB_PROCESSES or the number of CPU's available for the web
+// service, and 1 for collaboration unless REDIS_COLLABORATION_URL is set.
 let webProcessCount = env.WEB_CONCURRENCY;
 
 if (env.SERVICES.includes("collaboration") && !env.REDIS_COLLABORATION_URL) {
@@ -48,7 +51,7 @@ const isWorkerProcess =
 const processCount = isWorkerProcess
   ? 1
   : isWebProcess
-    ? (webProcessCount ?? os.cpus().length)
+    ? (webProcessCount ?? Math.min(os.cpus().length, DEFAULT_MAX_WEB_PROCESSES))
     : os.cpus().length;
 
 configureChildHeapLimit(processCount);
@@ -59,5 +62,10 @@ void throng({
   // master process, which only supervises the forked workers.
   worker: (id, disconnect) =>
     import("./main").then(({ start }) => start(id, disconnect)),
-  count: isWorkerProcess ? 1 : isWebProcess ? webProcessCount : undefined,
+  count: isWorkerProcess
+    ? 1
+    : isWebProcess
+      ? (webProcessCount ??
+        Math.min(os.cpus().length, DEFAULT_MAX_WEB_PROCESSES))
+      : undefined,
 });

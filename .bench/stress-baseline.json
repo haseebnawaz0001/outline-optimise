@@ -1,0 +1,14 @@
+{
+  "bootS": 31.1,
+  "rssMB": {
+    "avg": 720.4,
+    "max": 720.6
+  },
+  "redisOpsPerMinIdle": 1022,
+  "healthP50ms": 12.3,
+  "healthP95ms": 25.9,
+  "healthRPS": 1137.2,
+  "homeP50ms": 8.5,
+  "homeP95ms": 23.9,
+  "homeRPS": 1488.8
+}

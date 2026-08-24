@@ -9,6 +9,73 @@ import { EditorStyleHelper } from "@shared/editor/styles/EditorStyleHelper";
 
 const MAX_MATCH = 500;
 
+/**
+ * Cursor-context checks queued by instantiated SuggestionsMenuPlugins, keyed
+ * by plugin instance so that repeated registrations (a second keystroke before
+ * the flush runs) replace rather than stack. Insertion order is preserved so
+ * checks flush in instantiation order.
+ */
+const pendingChecks = new Map<SuggestionsMenuPlugin, () => void>();
+
+/**
+ * Whether a macrotask has been scheduled to flush the pending checks.
+ */
+let flushQueued = false;
+
+/**
+ * Queue a cursor-context check for the given plugin instance. All checks
+ * registered before the flush runs are executed together in a single
+ * macrotask, each against the current editor state.
+ *
+ * @param plugin The plugin instance requesting the check.
+ * @param check The check to run, typically evaluating the current cursor context.
+ */
+function registerCheck(plugin: SuggestionsMenuPlugin, check: () => void): void {
+  pendingChecks.set(plugin, check);
+  scheduleFlush();
+}
+
+/**
+ * Schedule a single macrotask to flush all pending checks, deferring the work
+ * past the keystroke and any synchronous ProseMirror handlers.
+ */
+function scheduleFlush(): void {
+  if (flushQueued) {
+    return;
+  }
+  flushQueued = true;
+  setTimeout(flushChecks, 0);
+}
+
+/**
+ * Run all queued checks sequentially, each against the current state, and
+ * clear the queue. Registrations made while flushing are left queued and
+ * picked up by a newly scheduled macrotask so the flush never re-enters
+ * itself within the same tick.
+ */
+function flushChecks(): void {
+  // Reset first so that checks registering follow-up work schedule the next
+  // macrotask instead of being lost or executed within this pass.
+  flushQueued = false;
+  const checks = Array.from(pendingChecks.values());
+  pendingChecks.clear();
+
+  let firstError: unknown;
+  for (const check of checks) {
+    try {
+      check();
+    } catch (error) {
+      // Keep flushing the remaining checks so that one failing menu does not
+      // prevent the others from updating; surface the first error afterwards.
+      firstError ??= error;
+    }
+  }
+
+  if (firstError !== undefined) {
+    throw firstError;
+  }
+}
+
 interface PluginState {
   decorations: DecorationSet;
 }
@@ -226,9 +293,10 @@ export class SuggestionsMenuPlugin extends Plugin<PluginState> {
           // we need them to be evaluated for the filter trigger to work
           // correctly. This additional handler adds inputrules-like handling.
           if (event.key === "Backspace") {
-            // timeout ensures that the delete has been handled by prosemirror
-            // and any characters removed, before we evaluate the rule.
-            setTimeout(() => {
+            // Deferring past the keystroke ensures that the delete has been
+            // handled by prosemirror and any characters removed, before we
+            // evaluate the rule.
+            registerCheck(this, () => {
               const { pos: fromPos } = view.state.selection.$from;
               this.execute(
                 view,
@@ -252,13 +320,13 @@ export class SuggestionsMenuPlugin extends Plugin<PluginState> {
                   return null;
                 })
               );
-            }, 0);
+            });
           }
 
           // Another plugin (e.g. the Placeholder mark) may consume the
           // handleTextInput event by returning true, which prevents the
-          // InputRule from evaluating the trigger character. We use a timeout
-          // here so the re-evaluation happens after all synchronous handlers
+          // InputRule from evaluating the trigger character. We defer the
+          // re-evaluation here so it happens after all synchronous handlers
           // have run, ensuring the suggestion menu still opens in those cases.
           if (
             !event.ctrlKey &&
@@ -266,7 +334,7 @@ export class SuggestionsMenuPlugin extends Plugin<PluginState> {
             !event.altKey &&
             event.key.length === 1
           ) {
-            setTimeout(() => {
+            registerCheck(this, () => {
               const { pos: fromPos } = view.state.selection.$from;
               this.execute(
                 view,
@@ -288,7 +356,7 @@ export class SuggestionsMenuPlugin extends Plugin<PluginState> {
                   return null;
                 }
               );
-            }, 0);
+            });
           }
 
           // If the menu is open then just ignore the key events in the editor
@@ -310,7 +378,20 @@ export class SuggestionsMenuPlugin extends Plugin<PluginState> {
 
   // based on the input rules code in Prosemirror, here:
   // https://github.com/ProseMirror/prosemirror-inputrules/blob/master/src/inputrules.js
-  private execute(
+  /**
+   * Evaluate the text before the cursor against the given regex and invoke the
+   * handler with any match. Skipped entirely during IME composition or when
+   * the cursor is inside code.
+   *
+   * @param view The editor view to evaluate.
+   * @param from The document position to resolve the cursor context from.
+   * @param to The end document position passed through to the handler.
+   * @param regex The regex to match the text before the cursor against.
+   * @param handler Called with the match, if any; a truthy return marks the
+   * check as handled.
+   * @returns True if the handler returned a truthy value, false otherwise.
+   */
+  execute(
     view: EditorView,
     from: number,
     to: number,

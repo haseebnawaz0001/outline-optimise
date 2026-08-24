@@ -26,6 +26,11 @@ function Contents() {
   const documentContext = useDocumentContext();
   const { headings } = documentContext;
   const itemRefs = useRef<Record<string, HTMLLIElement | null>>({});
+  // Cached heading elements so scroll tracking avoids a DOM query per heading
+  // on every scroll tick.
+  const headingElements = useRef<
+    Array<{ id: string; element: HTMLElement | null }>
+  >([]);
 
   // A heading chosen from the contents stays highlighted until the reader
   // scrolls themselves. Headings near the end of a document cannot reach the
@@ -87,15 +92,34 @@ function Contents() {
   }, [selectedSlug]);
 
   useEffect(() => {
+    headingElements.current = headings.map((heading) => {
+      const id = decodeURIComponentSafe(heading.id);
+
+      return {
+        id,
+        element: window.document.getElementById(id),
+      };
+    });
+  }, [headings]);
+
+  useEffect(() => {
     let activeId = headings.length > 0 ? headings[0].id : undefined;
 
     for (let key = 0; key < headings.length; key++) {
       const heading = headings[key];
-      const element = window.document.getElementById(
-        decodeURIComponentSafe(heading.id)
-      );
+      const cached = headingElements.current[key];
+      const element =
+        cached?.element && cached.element.isConnected
+          ? cached.element
+          : window.document.getElementById(decodeURIComponentSafe(heading.id));
 
       if (element) {
+        // Refresh the cache if the element had to be looked up again.
+        headingElements.current[key] = {
+          id: decodeURIComponentSafe(heading.id),
+          element,
+        };
+
         const bounding = element.getBoundingClientRect();
         if (bounding.top > HEADING_OFFSET) {
           break;
@@ -104,10 +128,10 @@ function Contents() {
       }
     }
 
-    if (scrolledSlug !== activeId) {
-      setScrolledSlug(activeId);
-    }
-  }, [scrollPosition, headings, scrolledSlug]);
+    // Only update state when the active slug actually changed so scroll ticks
+    // do not re-render the list.
+    setScrolledSlug((prev) => (prev === activeId ? prev : activeId));
+  }, [scrollPosition, headings]);
 
   useEffect(() => {
     const activeItem = activeSlug ? itemRefs.current[activeSlug] : undefined;

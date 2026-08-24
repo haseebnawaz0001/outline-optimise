@@ -9,6 +9,8 @@ import { trace } from "@server/logging/tracing";
 import { View } from "@server/models";
 import type { withContext } from "./types";
 
+const VIEW_TOUCH_INTERVAL_MS = 5 * Minute.ms;
+
 @trace()
 export class ViewsExtension implements Extension {
   /**
@@ -18,7 +20,7 @@ export class ViewsExtension implements Extension {
 
   /**
    * onChange hook. When a user changes a document, we update their "viewedAt"
-   * timestamp if it's been more than a minute since their last change.
+   * timestamp if it's been more than five minutes since their last change.
    *
    * @param data The change payload
    */
@@ -34,7 +36,10 @@ export class ViewsExtension implements Extension {
     const lastUpdate = this.lastViewBySocket.get(socketId);
     const [, documentId] = documentName.split(".");
 
-    if (!lastUpdate || Date.now() - lastUpdate.getTime() > Minute.ms) {
+    if (
+      !lastUpdate ||
+      Date.now() - lastUpdate.getTime() > VIEW_TOUCH_INTERVAL_MS
+    ) {
       this.lastViewBySocket.set(socketId, new Date());
 
       Logger.debug(

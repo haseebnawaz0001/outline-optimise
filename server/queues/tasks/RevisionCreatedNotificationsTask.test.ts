@@ -820,4 +820,192 @@ describe("revisions.create", () => {
     });
     expect(subscription).toBeNull();
   });
+
+  it("should notify all newly mentioned users", async () => {
+    const spy = vi.spyOn(Notification, "create");
+    const actor = await buildUser();
+    const mentioned0 = await buildUser({ teamId: actor.teamId });
+    const mentioned1 = await buildUser({ teamId: actor.teamId });
+
+    const document = await buildDocument({
+      teamId: actor.teamId,
+      userId: actor.id,
+    });
+    await Revision.createFromDocument(createContext({ user: actor }), document);
+
+    document.content = buildProseMirrorDoc([
+      ...(document.content?.content ?? []),
+      {
+        type: "paragraph",
+        content: [
+          buildMention({ modelId: mentioned0.id, actorId: actor.id }),
+          buildMention({ modelId: mentioned1.id, actorId: actor.id }),
+        ],
+      },
+    ]).toJSON();
+    document.setDataValue("updatedAt", new Date());
+    await document.save();
+
+    const revision = await Revision.createFromDocument(
+      createContext({ user: actor }),
+      document
+    );
+
+    const task = new RevisionCreatedNotificationsTask();
+    await task.perform({
+      name: "revisions.create",
+      documentId: document.id,
+      teamId: document.teamId,
+      actorId: actor.id,
+      modelId: revision.id,
+      ip,
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: NotificationEventType.MentionedInDocument,
+        userId: mentioned0.id,
+        actorId: actor.id,
+        documentId: document.id,
+      })
+    );
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: NotificationEventType.MentionedInDocument,
+        userId: mentioned1.id,
+        actorId: actor.id,
+        documentId: document.id,
+      })
+    );
+  });
+
+  it("should notify members of a mentioned group", async () => {
+    const spy = vi.spyOn(Notification, "create");
+    const actor = await buildUser();
+    const group = await buildGroup({ teamId: actor.teamId });
+    const member0 = await buildUser({ teamId: actor.teamId });
+    const member1 = await buildUser({ teamId: actor.teamId });
+    await buildGroupUser({ groupId: group.id, userId: member0.id });
+    await buildGroupUser({ groupId: group.id, userId: member1.id });
+
+    for (const member of [member0, member1]) {
+      member.setNotificationEventType(
+        NotificationEventType.GroupMentionedInDocument
+      );
+      await member.save();
+    }
+
+    const document = await buildDocument({
+      teamId: actor.teamId,
+      userId: actor.id,
+    });
+    await Revision.createFromDocument(createContext({ user: actor }), document);
+
+    document.content = buildProseMirrorDoc([
+      ...(document.content?.content ?? []),
+      {
+        type: "paragraph",
+        content: [
+          buildMention({
+            type: MentionType.Group,
+            modelId: group.id,
+            actorId: actor.id,
+            label: group.name,
+          }),
+        ],
+      },
+    ]).toJSON();
+    document.setDataValue("updatedAt", new Date());
+    await document.save();
+
+    const revision = await Revision.createFromDocument(
+      createContext({ user: actor }),
+      document
+    );
+
+    const task = new RevisionCreatedNotificationsTask();
+    await task.perform({
+      name: "revisions.create",
+      documentId: document.id,
+      teamId: document.teamId,
+      actorId: actor.id,
+      modelId: revision.id,
+      ip,
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: NotificationEventType.GroupMentionedInDocument,
+        groupId: group.id,
+        userId: member0.id,
+        actorId: actor.id,
+        documentId: document.id,
+      })
+    );
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: NotificationEventType.GroupMentionedInDocument,
+        groupId: group.id,
+        userId: member1.id,
+        actorId: actor.id,
+        documentId: document.id,
+      })
+    );
+  });
+
+  it("should suppress update notification only for recipients who viewed the document", async () => {
+    const spy = vi.spyOn(Notification, "create");
+    const collaborator0 = await buildUser();
+    const collaborator1 = await buildUser({ teamId: collaborator0.teamId });
+    const collaborator2 = await buildUser({ teamId: collaborator0.teamId });
+    let document = await buildDocument({
+      teamId: collaborator0.teamId,
+      userId: collaborator0.id,
+    });
+    await Revision.createFromDocument(
+      createContext({ user: collaborator0 }),
+      document
+    );
+    document = updateDocumentText(document, "Updated body content");
+    const revision = await Revision.createFromDocument(
+      createContext({ user: collaborator0 }),
+      document
+    );
+
+    await document.update({
+      collaboratorIds: [collaborator0.id, collaborator1.id, collaborator2.id],
+    });
+
+    // Backdate the update so the view is recorded strictly after it.
+    await document.update(
+      { updatedAt: subSeconds(new Date(), 60) },
+      { silent: true }
+    );
+
+    // Only `collaborator1` views the document since the update.
+    await View.create({
+      userId: collaborator1.id,
+      documentId: document.id,
+    });
+
+    const task = new RevisionCreatedNotificationsTask();
+    await task.perform({
+      name: "revisions.create",
+      documentId: document.id,
+      teamId: document.teamId,
+      actorId: collaborator0.id,
+      modelId: revision.id,
+      ip,
+    });
+
+    // Only `collaborator2` should receive an update notification.
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: NotificationEventType.UpdateDocument,
+        userId: collaborator2.id,
+        documentId: document.id,
+      })
+    );
+  });
 });

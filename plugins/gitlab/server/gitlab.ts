@@ -1,6 +1,6 @@
-import { Gitlab } from "@gitbeaker/rest";
 import type {
   EpicSchema,
+  Gitlab,
   IssueSchemaWithExpandedLabels,
   MergeRequestSchema,
   ProjectSchema,
@@ -36,9 +36,32 @@ const AccessTokenResponseSchema = z.object({
   created_at: z.number(),
 });
 
+/**
+ * The parts of the dynamically imported "@gitbeaker/rest" module that this
+ * file uses.
+ */
+interface GitbeakerModule {
+  Gitlab: new (options: { host?: string; oauthToken?: string }) => Gitlab;
+}
+
 export class GitLab {
   private static clientSecret = env.GITLAB_CLIENT_SECRET;
   private static clientId = env.GITLAB_CLIENT_ID;
+
+  /** Memoized module import, resolved once per process. */
+  private static gitbeaker?: Promise<GitbeakerModule>;
+
+  /**
+   * Lazily loads the Gitbeaker REST SDK so requiring this plugin at boot does
+   * not pull its module graph into every process. The import promise is cached
+   * so repeated requests never re-import.
+   */
+  private static loadGitbeaker(): Promise<GitbeakerModule> {
+    if (!GitLab.gitbeaker) {
+      GitLab.gitbeaker = import("@gitbeaker/rest");
+    }
+    return GitLab.gitbeaker;
+  }
 
   /**
    * Fetches the custom GitLab URL for a team from the first matching
@@ -72,6 +95,7 @@ export class GitLab {
     // fetch wrapper which has built-in SSRF protection.
     await validateUrlNotPrivate(host);
 
+    const { Gitlab } = await GitLab.loadGitbeaker();
     return new Gitlab({
       host,
       oauthToken: accessToken,

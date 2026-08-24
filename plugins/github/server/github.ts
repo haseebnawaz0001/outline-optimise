@@ -1,12 +1,10 @@
-import {
-  createOAuthUserAuth,
-  createAppAuth,
-  type OAuthWebFlowAuthOptions,
-  type InstallationAuthOptions,
+import type {
+  OAuthWebFlowAuthOptions,
+  InstallationAuthOptions,
 } from "@octokit/auth-app";
 import { Sequelize } from "sequelize";
 import type { Endpoints, OctokitResponse } from "@octokit/types";
-import { Octokit } from "octokit";
+import type { Octokit } from "octokit";
 import pluralize from "pluralize";
 import { toError, errToString } from "@shared/utils/error";
 import type { IntegrationType } from "@shared/types";
@@ -200,7 +198,46 @@ const requestPlugin = (octokit: Octokit) => ({
     }),
 });
 
-const CustomOctokit = Octokit.plugin(requestPlugin);
+/** An Octokit instance augmented with Outline's request plugin methods. */
+type CustomOctokitInstance = Octokit & ReturnType<typeof requestPlugin>;
+
+/**
+ * The shape of the dynamically imported "octokit" module's Octokit class that
+ * this file uses.
+ */
+interface OctokitClass {
+  plugin(
+    plugin: typeof requestPlugin
+  ): new (options?: Record<string, unknown>) => CustomOctokitInstance;
+}
+
+/** The parts of the dynamically imported "@octokit/auth-app" module used here. */
+interface AuthAppModule {
+  createAppAuth: unknown;
+  createOAuthUserAuth: unknown;
+}
+
+interface OctokitModules {
+  octokit: { Octokit: OctokitClass };
+  authApp: AuthAppModule;
+}
+
+let octokitModules: Promise<OctokitModules> | undefined;
+
+/**
+ * Lazily loads the Octokit SDK and its auth strategies so requiring this
+ * plugin at boot does not pull their module graphs into every process. The
+ * import promise is memoized so repeated requests never re-import.
+ *
+ * @returns The loaded "octokit" and "@octokit/auth-app" modules.
+ */
+function loadOctokitModules() {
+  octokitModules ??= Promise.all([
+    import("octokit"),
+    import("@octokit/auth-app"),
+  ]).then(([octokit, authApp]) => ({ octokit, authApp }));
+  return octokitModules;
+}
 
 export class GitHub {
   private static appId = env.GITHUB_APP_ID;
@@ -211,12 +248,36 @@ export class GitHub {
   private static clientId = env.GITHUB_CLIENT_ID;
   private static clientSecret = env.GITHUB_CLIENT_SECRET;
 
-  private static appOctokit: Octokit;
+  private static appOctokit?: Octokit;
 
   private static supportedResources = [
     UnfurlResourceType.Issue,
     UnfurlResourceType.PR,
   ];
+
+  /**
+   * Lazily constructs the app-authenticated Octokit instance, deferring the
+   * Octokit SDK import to first use. The instance is memoized as before.
+   *
+   * @returns An app-authenticated Octokit instance.
+   */
+  private static authenticateAsApp = async () => {
+    if (!GitHub.appOctokit) {
+      const { octokit, authApp } = await loadOctokitModules();
+      const CustomOctokit = octokit.Octokit.plugin(requestPlugin);
+      GitHub.appOctokit = new CustomOctokit({
+        authStrategy: authApp.createAppAuth,
+        auth: {
+          appId: GitHub.appId,
+          privateKey: GitHub.appKey,
+          clientId: GitHub.clientId,
+          clientSecret: GitHub.clientSecret,
+        },
+      });
+    }
+
+    return GitHub.appOctokit;
+  };
 
   /**
    * Parses a given URL and returns resource identifiers for GitHub specific URLs
@@ -279,22 +340,6 @@ export class GitHub {
     }
   }
 
-  private static authenticateAsApp = () => {
-    if (!GitHub.appOctokit) {
-      GitHub.appOctokit = new CustomOctokit({
-        authStrategy: createAppAuth,
-        auth: {
-          appId: GitHub.appId,
-          privateKey: GitHub.appKey,
-          clientId: GitHub.clientId,
-          clientSecret: GitHub.clientSecret,
-        },
-      });
-    }
-
-    return GitHub.appOctokit;
-  };
-
   /**
    * [Authenticates as a GitHub user](https://github.com/octokit/auth-app.js/?tab=readme-ov-file#authenticate-as-installation)
    *
@@ -305,17 +350,21 @@ export class GitHub {
   public static authenticateAsUser = async (
     code: string,
     state?: string | null
-  ) =>
-    GitHub.authenticateAsApp().auth({
+  ) => {
+    const { octokit, authApp } = await loadOctokitModules();
+    const CustomOctokit = octokit.Octokit.plugin(requestPlugin);
+
+    return (await GitHub.authenticateAsApp()).auth({
       type: "oauth-user",
       code,
       state,
       factory: (options: OAuthWebFlowAuthOptions) =>
         new CustomOctokit({
-          authStrategy: createOAuthUserAuth,
+          authStrategy: authApp.createOAuthUserAuth,
           auth: options,
         }),
-    }) as Promise<InstanceType<typeof CustomOctokit>>;
+    }) as Promise<CustomOctokitInstance>;
+  };
 
   /**
    * [Authenticates as a GitHub app installation](https://github.com/octokit/auth-app.js/?tab=readme-ov-file#authenticate-as-installation)
@@ -323,16 +372,20 @@ export class GitHub {
    * @param installationId Id of an installation
    * @returns {Octokit} Installation-authenticated octokit instance
    */
-  public static authenticateAsInstallation = async (installationId: number) =>
-    GitHub.authenticateAsApp().auth({
+  public static authenticateAsInstallation = async (installationId: number) => {
+    const { octokit, authApp } = await loadOctokitModules();
+    const CustomOctokit = octokit.Octokit.plugin(requestPlugin);
+
+    return (await GitHub.authenticateAsApp()).auth({
       type: "installation",
       installationId,
       factory: (options: InstallationAuthOptions) =>
         new CustomOctokit({
-          authStrategy: createAppAuth,
+          authStrategy: authApp.createAppAuth,
           auth: options,
         }),
-    }) as Promise<InstanceType<typeof CustomOctokit>>;
+    }) as Promise<CustomOctokitInstance>;
+  };
 
   /**
    *
@@ -394,7 +447,7 @@ export class GitHub {
   };
 
   private static async unfurlProject(
-    client: InstanceType<typeof CustomOctokit>,
+    client: CustomOctokitInstance,
     resource: ParsedProject
   ) {
     let project: GitHubProject | undefined;

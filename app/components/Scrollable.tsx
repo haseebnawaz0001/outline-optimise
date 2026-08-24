@@ -54,17 +54,72 @@ function Scrollable(
   const trackTop = !!(shadow || topShadow || fadeTop);
   const trackBottom = !!(shadow || bottomShadow || fadeBottom);
 
+  // Last seen container metrics so repeated scroll/resize events that do not
+  // change the geometry skip state updates entirely.
+  const metrics = React.useRef({
+    scrollTop: 0,
+    scrollHeight: 0,
+    clientHeight: 0,
+    trackTop: false,
+    trackBottom: false,
+  });
+  const frame = React.useRef<number>();
+  const settleTimeout = React.useRef<ReturnType<typeof setTimeout>>();
+
   const updateShadows = React.useCallback(() => {
     const c = localRef.current;
     if (!c) {
       return;
     }
+
     const scrollTop = c.scrollTop;
+    const scrollHeight = c.scrollHeight;
+    const clientHeight = c.clientHeight;
+
+    const previous = metrics.current;
+    if (
+      previous.scrollTop === scrollTop &&
+      previous.scrollHeight === scrollHeight &&
+      previous.clientHeight === clientHeight &&
+      previous.trackTop === trackTop &&
+      previous.trackBottom === trackBottom
+    ) {
+      return;
+    }
+    metrics.current = {
+      scrollTop,
+      scrollHeight,
+      clientHeight,
+      trackTop,
+      trackBottom,
+    };
+
     setTopShadow(trackTop && scrollTop > 0);
 
     const wrapperHeight = c.scrollHeight - c.clientHeight;
     setBottomShadow(trackBottom && wrapperHeight - scrollTop > 1);
   }, [trackTop, trackBottom]);
+
+  // Batch updates to one animation frame, with a trailing call after scrolling
+  // stops so the edge shadows settle at their final position.
+  const requestUpdateShadows = React.useCallback(() => {
+    if (settleTimeout.current) {
+      clearTimeout(settleTimeout.current);
+    }
+    settleTimeout.current = setTimeout(() => {
+      settleTimeout.current = undefined;
+      updateShadows();
+    }, 100);
+
+    if (frame.current !== undefined) {
+      return;
+    }
+
+    frame.current = requestAnimationFrame(() => {
+      frame.current = undefined;
+      updateShadows();
+    });
+  }, [updateShadows]);
 
   React.useEffect(() => {
     const c = localRef.current;
@@ -74,20 +129,30 @@ function Scrollable(
 
     updateShadows();
 
-    const observer = new ResizeObserver(updateShadows);
+    const observer = new ResizeObserver(requestUpdateShadows);
     observer.observe(c);
 
     for (const child of Array.from(c.children)) {
       observer.observe(child);
     }
 
-    return () => observer.disconnect();
-  }, [updateShadows]);
+    return () => {
+      observer.disconnect();
+      if (frame.current !== undefined) {
+        cancelAnimationFrame(frame.current);
+        frame.current = undefined;
+      }
+      if (settleTimeout.current) {
+        clearTimeout(settleTimeout.current);
+        settleTimeout.current = undefined;
+      }
+    };
+  }, [updateShadows, requestUpdateShadows]);
 
   return (
     <Wrapper
       ref={mergeRefs([localRef, ref])}
-      onScroll={updateShadows}
+      onScroll={requestUpdateShadows}
       $flex={flex}
       $hiddenScrollbars={hiddenScrollbars}
       $topShadowVisible={topShadowVisible && !fadeTop}

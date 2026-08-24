@@ -94,7 +94,7 @@ describe("documents.publish", () => {
   });
 });
 
-describe("documents.update", () => {
+describe("documents.update.debounced", () => {
   it("should not fail on a document with no previous revisions", async () => {
     const team = await buildTeam();
     const otherDocument = await buildDocument({ teamId: team.id });
@@ -105,7 +105,7 @@ describe("documents.update", () => {
 
     const processor = new BacklinksProcessor();
     await processor.perform({
-      name: "documents.update",
+      name: "documents.update.debounced",
       documentId: document.id,
       collectionId: document.collectionId!,
       teamId: document.teamId,
@@ -138,7 +138,7 @@ describe("documents.update", () => {
 
     const processor = new BacklinksProcessor();
     await processor.perform({
-      name: "documents.update",
+      name: "documents.update.debounced",
       documentId: document.id,
       collectionId: document.collectionId!,
       teamId: document.teamId,
@@ -167,7 +167,7 @@ describe("documents.update", () => {
 
     const processor = new BacklinksProcessor();
     await processor.perform({
-      name: "documents.update",
+      name: "documents.update.debounced",
       documentId: document.id,
       collectionId: document.collectionId!,
       teamId: document.teamId,
@@ -215,7 +215,7 @@ describe("documents.update", () => {
     await document.save();
 
     await processor.perform({
-      name: "documents.update",
+      name: "documents.update.debounced",
       documentId: document.id,
       collectionId: document.collectionId!,
       teamId: document.teamId,
@@ -235,6 +235,41 @@ describe("documents.update", () => {
   });
 });
 
+describe("documents.update", () => {
+  it("should not be processed", async () => {
+    expect(BacklinksProcessor.applicableEvents).not.toContain(
+      "documents.update"
+    );
+
+    const team = await buildTeam();
+    const otherDocument = await buildDocument({ teamId: team.id });
+    const document = await buildDocument({ teamId: team.id });
+    document.content = parser
+      .parse(`[this is a link](${otherDocument.url})`)
+      ?.toJSON();
+    await document.save();
+
+    const processor = new BacklinksProcessor();
+    await processor.perform({
+      name: "documents.update",
+      documentId: document.id,
+      collectionId: document.collectionId!,
+      teamId: document.teamId,
+      actorId: document.createdById,
+      createdAt: new Date().toISOString(),
+      data: { done: true },
+      ip,
+    });
+    const backlinks = await Relationship.findAll({
+      where: {
+        reverseDocumentId: document.id,
+        type: RelationshipType.Backlink,
+      },
+    });
+    expect(backlinks.length).toBe(0);
+  });
+});
+
 describe("documents.delete", () => {
   it("should destroy related backlinks", async () => {
     const team = await buildTeam();
@@ -247,7 +282,7 @@ describe("documents.delete", () => {
 
     const processor = new BacklinksProcessor();
     await processor.perform({
-      name: "documents.update",
+      name: "documents.update.debounced",
       documentId: document.id,
       collectionId: document.collectionId!,
       teamId: document.teamId,

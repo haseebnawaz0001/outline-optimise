@@ -207,7 +207,7 @@ export class Environment {
   @IsNumber()
   @Min(1000)
   public REDIS_HEALTHCHECK_INTERVAL = parseInt(
-    environment.REDIS_HEALTHCHECK_INTERVAL || "30000",
+    environment.REDIS_HEALTHCHECK_INTERVAL || "120000",
     10
   );
 
@@ -380,15 +380,6 @@ export class Environment {
   @IsBoolean()
   public PROXY_HEADERS_TRUSTED = this.toBoolean(
     environment.PROXY_HEADERS_TRUSTED ?? "true"
-  );
-
-  /**
-   * Should the installation send anonymized statistics to the maintainers.
-   * Defaults to true.
-   */
-  @IsBoolean()
-  public TELEMETRY = this.toBoolean(
-    environment.ENABLE_UPDATES ?? environment.TELEMETRY ?? "true"
   );
 
   // Third-party services

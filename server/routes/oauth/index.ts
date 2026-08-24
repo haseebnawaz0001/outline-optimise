@@ -7,7 +7,6 @@ import { ValidationError, NotFoundError } from "@server/errors";
 import { apiContext } from "@server/middlewares/apiContext";
 import auth from "@server/middlewares/authentication";
 import { rateLimiter } from "@server/middlewares/rateLimiter";
-import requestTracer from "@server/middlewares/requestTracer";
 import { transaction } from "@server/middlewares/transaction";
 import validate from "@server/middlewares/validate";
 import { OAuthAuthorizationCode, OAuthClient, Team } from "@server/models";
@@ -294,7 +293,6 @@ router.delete(
   }
 );
 
-app.use(requestTracer());
 app.use(oauthErrorHandler());
 app.use(bodyParser());
 app.use(apiContext());

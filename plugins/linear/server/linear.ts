@@ -1,5 +1,4 @@
-import type { Issue, WorkflowState } from "@linear/sdk";
-import { LinearClient } from "@linear/sdk";
+import type { Issue, LinearClient, WorkflowState } from "@linear/sdk";
 import { toError } from "@shared/utils/error";
 import fetch from "@server/utils/fetch";
 import { sortBy } from "es-toolkit/compat";
@@ -30,11 +29,38 @@ const AccessTokenResponseSchema = z.object({
   scope: z.string(),
 });
 
+/**
+ * The parts of the dynamically imported "@linear/sdk" module that this file
+ * uses.
+ */
+interface LinearSdkModule {
+  LinearClient: new (options?: { accessToken?: string }) => LinearClient;
+}
+
 export class Linear {
   private static supportedUnfurls = [
     UnfurlResourceType.Issue,
     UnfurlResourceType.Project,
   ];
+
+  /** Memoized module import, resolved once per process. */
+  private static linearSdk?: Promise<LinearSdkModule>;
+
+  /**
+   * Lazily loads the Linear SDK and constructs a client with the given access
+   * token. The SDK module graph is not pulled in at boot; the import promise
+   * is cached so repeated requests never re-import.
+   *
+   * @param accessToken The access token to authenticate the client with.
+   * @returns A configured Linear client.
+   */
+  private static async createClient(accessToken: string) {
+    if (!Linear.linearSdk) {
+      Linear.linearSdk = import("@linear/sdk");
+    }
+    const { LinearClient } = await Linear.linearSdk;
+    return new LinearClient({ accessToken });
+  }
 
   static async oauthAccess(code: string) {
     const headers = {
@@ -103,7 +129,7 @@ export class Linear {
   }
 
   static async getInstalledWorkspace(accessToken: string) {
-    const client = new LinearClient({ accessToken });
+    const client = await Linear.createClient(accessToken);
     return client.organization;
   }
 
@@ -145,7 +171,7 @@ export class Linear {
         5 * Minute.ms
       );
 
-      const client = new LinearClient({ accessToken });
+      const client = await Linear.createClient(accessToken);
 
       switch (resource.type) {
         case UnfurlResourceType.Issue:

@@ -1,0 +1,6 @@
+Baseline suite (pristine HEAD, recorded pre-changes):
+Test Files  348 passed | 1 skipped (349)
+      Tests  4728 passed | 23 skipped (4751)
+   Duration  1334.14s
+tsc --noEmit: 0 errors
+oxlint app server shared plugins: exit 0

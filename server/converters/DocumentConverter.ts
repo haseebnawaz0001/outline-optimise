@@ -108,10 +108,20 @@ export class DocumentConverter extends BaseConverter {
   ): Promise<Node> {
     content = this.bufferToString(content);
 
-    // Loaded lazily to keep jsdom off the startup path — only HTML imports need it.
-    const { JSDOM } = await import("jsdom");
-    const dom = new JSDOM(content);
-    const document = dom.window.document;
+    // Parsed with linkedom, loaded lazily to keep it off the startup path —
+    // only HTML imports need it.
+    const { parseHTML } = await import("linkedom");
+    let dom = parseHTML(content);
+
+    // Unlike jsdom, linkedom does not synthesize html/body wrappers around
+    // markup fragments, leaving them at the root of the parsed document with
+    // an empty body. Re-parse wrapped so the content sits in body, matching
+    // what Prosemirror's DOMParser expects.
+    if (!dom.document.body.hasChildNodes()) {
+      dom = parseHTML(`<html><head></head><body>${content}</body></html>`);
+    }
+
+    const document = dom.document;
 
     // Remove problematic elements before parsing
     const elementsToRemove = document.querySelectorAll(
@@ -123,18 +133,13 @@ export class DocumentConverter extends BaseConverter {
     HtmlPreprocessor.preprocess(document);
 
     // Patch global environment for Prosemirror DOMParser
-    const cleanup = ProsemirrorHelper.patchGlobalEnv(dom.window);
+    const cleanup = ProsemirrorHelper.patchGlobalEnv(dom);
 
     try {
       const domParser = ProsemirrorDOMParser.fromSchema(schema);
       return domParser.parse(document.body);
     } finally {
       cleanup();
-      try {
-        dom.window.close();
-      } catch (_err) {
-        // Best effort, closing the window releases its timers and resources.
-      }
     }
   }
 
@@ -251,7 +256,7 @@ export class DocumentConverter extends BaseConverter {
 
   /**
    * Converters are loaded on demand so that the dependencies of a format —
-   * jsdom, mammoth, mailparser, fast-csv, yauzl, pdf-inspector — stay off the server startup
+   * linkedom, mammoth, mailparser, fast-csv, yauzl, pdf-inspector — stay off the server startup
    * path, and are only paid for by an import that actually needs them.
    */
   private static async docx() {

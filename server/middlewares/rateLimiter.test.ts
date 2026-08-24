@@ -126,6 +126,21 @@ describe("rateLimiter middleware", () => {
     expect(limiter).toBe(RateLimiter.defaultRateLimiter);
   });
 
+  it("bypasses rate limiting for the health endpoint without consuming quota", async () => {
+    const middleware = defaultRateLimiter();
+    const consumeSpy = vi
+      .spyOn(RateLimiter.defaultRateLimiter, "consume")
+      .mockResolvedValue({} as never);
+    const identifiersSpy = vi.spyOn(RateLimiter, "getCachedUserIdForToken");
+    const next = vi.fn();
+
+    await middleware(createContext({ path: "/_health" }), next);
+
+    expect(next).toHaveBeenCalled();
+    expect(consumeSpy).not.toHaveBeenCalled();
+    expect(identifiersSpy).not.toHaveBeenCalled();
+  });
+
   describe("cache-keyed rate limiting", () => {
     it("falls back to IP when no token is present", async () => {
       const middleware = defaultRateLimiter();

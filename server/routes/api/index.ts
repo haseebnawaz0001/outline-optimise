@@ -1,15 +1,11 @@
-import type { BaseContext } from "koa";
 import Koa from "koa";
 import bodyParser from "koa-body";
 import Router from "koa-router";
-import type { UserAgentContext } from "koa-useragent";
-import userAgent from "koa-useragent";
 import env from "@server/env";
 import { NotFoundError } from "@server/errors";
 import { apiContext } from "@server/middlewares/apiContext";
 import coalesceBody from "@server/middlewares/coaleseBody";
 import requestContextMiddleware from "@server/middlewares/requestContext";
-import requestTracer from "@server/middlewares/requestTracer";
 import { verifyCSRFToken } from "@server/middlewares/csrf";
 import type { AppState, AppContext } from "@server/types";
 import { Hook, PluginManager } from "@server/utils/PluginManager";
@@ -73,8 +69,6 @@ api.use(
   })
 );
 api.use(coalesceBody());
-api.use<BaseContext, UserAgentContext>(userAgent);
-api.use(requestTracer());
 api.use(apiResponse());
 api.use(apiErrorHandler());
 api.use(editor());

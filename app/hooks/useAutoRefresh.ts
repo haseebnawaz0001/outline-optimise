@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef } from "react";
 import { Minute } from "@shared/utils/time";
 import Logger from "~/utils/Logger";
 import useIdle from "./useIdle";
@@ -13,13 +13,15 @@ let isReloaded = false;
  * Hook to reload the app around once a day to stop old code from running.
  */
 export default function useAutoRefresh() {
-  const [minutes, setMinutes] = useState(0);
+  // A ref rather than state so that the once-a-minute tick does not re-render
+  // the entire route tree this hook is mounted within.
+  const elapsedMinutes = useRef(0);
   const isIdle = useIdle(5 * Minute.ms);
 
   useInterval(() => {
-    setMinutes((prev) => prev + 1);
+    elapsedMinutes.current += 1;
 
-    if (minutes >= 60 * 24) {
+    if (elapsedMinutes.current >= 60 * 24) {
       if (!isIdle) {
         Logger.debug("lifecycle", "Skipping reload due to user activity");
         return;

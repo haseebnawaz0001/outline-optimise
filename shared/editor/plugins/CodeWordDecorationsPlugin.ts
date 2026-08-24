@@ -1,8 +1,7 @@
-import type { Node } from "prosemirror-model";
+import type { MarkType, Node } from "prosemirror-model";
 import type { EditorState, Transaction } from "prosemirror-state";
 import { Plugin } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
-import { changedDescendants } from "../lib/changedDescendants";
 import { isRemoteTransaction } from "../lib/multiplayer";
 import { EditorStyleHelper } from "../styles/EditorStyleHelper";
 
@@ -11,6 +10,37 @@ interface CodeWordDecorationsConfig {
   className?: string;
   /** Tokens longer than this many characters are left unwrapped so they break */
   maxWordLength?: number;
+}
+
+/**
+ * Check whether a node is a text node carrying the given mark.
+ *
+ * @param node The node to check.
+ * @param markType The mark type to look for.
+ * @returns True when the node is marked text.
+ */
+function hasCodeInlineMark(node: Node, markType: MarkType): boolean {
+  return node.isText && node.marks.some((mark) => mark.type === markType);
+}
+
+/**
+ * Check whether a node or any of its descendants is text carrying the given
+ * mark, stopping at the first match.
+ *
+ * @param node The node to scan.
+ * @param markType The mark type to look for.
+ * @returns True when marked text exists in the subtree.
+ */
+function subtreeHasCodeInline(node: Node, markType: MarkType): boolean {
+  if (hasCodeInlineMark(node, markType)) {
+    return true;
+  }
+  for (let i = 0; i < node.childCount; i++) {
+    if (subtreeHasCodeInline(node.child(i), markType)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 class CodeWordDecorationsPlugin extends Plugin {
@@ -53,7 +83,9 @@ class CodeWordDecorationsPlugin extends Plugin {
   }
 
   /**
-   * Check if the transaction changed any text nodes with code_inline marks.
+   * Check if the transaction changed any text nodes with code_inline marks,
+   * covering additions, edits, and deletions in a single traversal over the
+   * changed regions only.
    */
   private hasCodeInlineChange(tr: Transaction): boolean {
     const codeMarkType = tr.doc.type.schema.marks.code_inline;
@@ -61,22 +93,79 @@ class CodeWordDecorationsPlugin extends Plugin {
       return false;
     }
 
-    let found = false;
-    const check = (node: Node) => {
-      if (
-        !found &&
-        node.isText &&
-        node.marks.some((m) => m.type === codeMarkType)
-      ) {
-        found = true;
-      }
-    };
+    return this.changedNodeHasCodeInline(tr.before, tr.doc, codeMarkType);
+  }
 
-    changedDescendants(tr.before, tr.doc, 0, check);
-    if (!found) {
-      changedDescendants(tr.doc, tr.before, 0, check);
+  /**
+   * Walks the nodes that changed between two versions of a node, mirroring
+   * the pairing heuristic of changedDescendants, and checks both sides of
+   * each changed region for marked text so a single pass replaces separate
+   * forward and backward scans. Stops at the first match.
+   *
+   * @param oldNode The previous version of the node.
+   * @param curNode The current version of the node.
+   * @param markType The mark type to look for.
+   * @returns True when a changed text node carries the mark.
+   */
+  private changedNodeHasCodeInline(
+    oldNode: Node,
+    curNode: Node,
+    markType: MarkType
+  ): boolean {
+    const oldSize = oldNode.childCount,
+      curSize = curNode.childCount;
+
+    let j = 0;
+    outer: for (let i = 0; i < curSize; i++) {
+      const child = curNode.child(i);
+      for (let scan = j, e = Math.min(oldSize, i + 3); scan < e; scan++) {
+        if (oldNode.child(scan) === child) {
+          j = scan + 1;
+          continue outer;
+        }
+      }
+
+      // The child is new or rewritten on the current side.
+      if (hasCodeInlineMark(child, markType)) {
+        return true;
+      }
+
+      let found = false;
+      if (j < oldSize && oldNode.child(j).sameMarkup(child)) {
+        found = this.changedNodeHasCodeInline(
+          oldNode.child(j),
+          child,
+          markType
+        );
+      } else {
+        child.nodesBetween(0, child.content.size, (node) => {
+          if (hasCodeInlineMark(node, markType)) {
+            found = true;
+            return false;
+          }
+          return true;
+        });
+
+        // A wholesale replacement may also have deleted marked content on
+        // the previous side; check the replaced counterpart as well.
+        if (!found && j < oldSize) {
+          found = subtreeHasCodeInline(oldNode.child(j), markType);
+        }
+      }
+
+      if (found) {
+        return true;
+      }
     }
-    return found;
+
+    // Trailing deletions: previous children with no current counterpart.
+    for (; j < oldSize; j++) {
+      if (subtreeHasCodeInline(oldNode.child(j), markType)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private createDecorations(

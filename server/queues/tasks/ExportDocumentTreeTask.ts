@@ -356,7 +356,8 @@ export default abstract class ExportDocumentTreeTask extends ExportTask {
     map: Map<string, string>,
     nodes: NavigationNode[],
     root: string,
-    format: FileOperationFormat
+    format: FileOperationFormat,
+    usedPaths: Set<string> = new Set(map.values())
   ) {
     for (const node of nodes) {
       const title = serializeFilename(node.title) || "Untitled";
@@ -366,7 +367,7 @@ export default abstract class ExportDocumentTreeTask extends ExportTask {
       // the same title as another document in the same collection.
       let i = 0;
       let filePath = path.join(root, `${title}.${extension}`);
-      while (Array.from(map.values()).includes(filePath)) {
+      while (usedPaths.has(filePath)) {
         filePath = path.join(root, `${title} (${++i}).${extension}`);
       }
 
@@ -375,6 +376,7 @@ export default abstract class ExportDocumentTreeTask extends ExportTask {
       // If this is an imported document, the references to this doc are in the 'doc/{docId}' format.
       // Set this format to replace them with relative URLs in the zip.
       map.set(`/doc/${node.id}`, filePath);
+      usedPaths.add(filePath);
 
       if (node.children?.length) {
         this.addDocumentTreeToPathMap(

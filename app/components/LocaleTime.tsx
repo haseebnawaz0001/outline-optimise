@@ -22,4 +22,4 @@ const LocaleTime: React.FC<Props> = ({ children, ...rest }: Props) => {
   );
 };
 
-export default LocaleTime;
+export default React.memo(LocaleTime);

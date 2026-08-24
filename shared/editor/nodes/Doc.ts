@@ -24,18 +24,33 @@ export default class Doc extends Node<DocOptions> {
 
   get plugins() {
     return [
-      new PlaceholderPlugin([
+      new PlaceholderPlugin(
+        [
+          {
+            // The document-level emptiness check (doc text content === "") is
+            // implied by the structural checks below: when the document's only
+            // child has no inline content there is no text anywhere in it, so
+            // the plugin can use an O(1) fast path instead of walking the
+            // whole document on every keystroke.
+            condition: ({ $start, parent, node, state }) =>
+              !isNull(parent) &&
+              parent.type === state.doc.type &&
+              parent.childCount === 1 &&
+              node.childCount === 0 &&
+              $start.index($start.depth - 1) === 0,
+            text: this.options.placeholder,
+          },
+        ],
+        ["paragraph"],
         {
-          condition: ({ $start, parent, node, state, textContent }) =>
-            textContent === "" &&
-            !isNull(parent) &&
-            parent.type === state.doc.type &&
-            parent.childCount === 1 &&
-            node.childCount === 0 &&
-            $start.index($start.depth - 1) === 0,
-          text: this.options.placeholder,
-        },
-      ]),
+          // The condition above can only match a document consisting of a
+          // single empty paragraph; anything else short-circuits to empty.
+          canMatch: (doc) =>
+            doc.childCount === 1 &&
+            doc.firstChild?.type.name === "paragraph" &&
+            doc.firstChild.content.size === 0,
+        }
+      ),
     ];
   }
 }

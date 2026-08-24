@@ -8,7 +8,7 @@ import BaseProcessor from "./BaseProcessor";
 export default class BacklinksProcessor extends BaseProcessor {
   static applicableEvents: Event["name"][] = [
     "documents.publish",
-    "documents.update",
+    "documents.update.debounced",
     "documents.delete",
   ];
 
@@ -58,7 +58,7 @@ export default class BacklinksProcessor extends BaseProcessor {
         break;
       }
 
-      case "documents.update": {
+      case "documents.update.debounced": {
         const document = await Document.findByPk(event.documentId);
         if (!document) {
           return;

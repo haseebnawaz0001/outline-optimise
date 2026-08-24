@@ -364,7 +364,25 @@ export default class ToggleBlock extends Node {
             text: `${t("Type '/' to insert")}…`,
           },
         ],
-        ["paragraph", "heading"]
+        ["paragraph", "heading"],
+        {
+          // Placeholders only ever target children of toggle blocks, so
+          // document changes elsewhere are handled by mapping positions
+          // instead of recomputing decorations across the whole document.
+          // Note none of the conditions above read the document-level text
+          // content, so it is never materialized for this instance.
+          isChangedNodeRelevant: (node, $pos) => {
+            if (node.type.name === this.name) {
+              return true;
+            }
+            for (let depth = 1; depth <= $pos.depth; depth++) {
+              if ($pos.node(depth).type.name === this.name) {
+                return true;
+              }
+            }
+            return false;
+          },
+        }
       ),
     ];
   }

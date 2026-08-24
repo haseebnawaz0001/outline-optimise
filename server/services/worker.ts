@@ -15,6 +15,89 @@ import {
 import processors from "../queues/processors";
 import tasks from "../queues/tasks";
 
+/**
+ * The events routed to the dedicated websocket queue, derived from the switch
+ * cases handled by WebsocketsProcessor. Events outside this list would be
+ * no-ops for the processor, so they are not queued at all.
+ */
+const websocketApplicableEvents: Event["name"][] = [
+  "templates.create",
+  "templates.update",
+  "templates.restore",
+  "templates.delete",
+  "documents.create",
+  "documents.publish",
+  "documents.restore",
+  "documents.unpublish",
+  "documents.unarchive",
+  "documents.permanent_delete",
+  "documents.archive",
+  "documents.delete",
+  "documents.update",
+  "documents.move",
+  "documents.add_user",
+  "documents.remove_user",
+  "documents.add_group",
+  "documents.remove_group",
+  "collections.create",
+  "collections.update",
+  "collections.delete",
+  "collections.archive",
+  "collections.restore",
+  "collections.move",
+  "collections.add_user",
+  "collections.remove_user",
+  "collections.add_group",
+  "collections.remove_group",
+  "fileOperations.create",
+  "fileOperations.update",
+  "imports.create",
+  "imports.update",
+  "pins.create",
+  "pins.update",
+  "pins.delete",
+  "comments.create",
+  "comments.update",
+  "comments.delete",
+  "comments.add_reaction",
+  "comments.remove_reaction",
+  "notifications.create",
+  "notifications.update",
+  "stars.create",
+  "stars.update",
+  "stars.delete",
+  "groups.create",
+  "groups.update",
+  "groups.add_user",
+  "groups.remove_user",
+  "groups.delete",
+  "subscriptions.create",
+  "subscriptions.delete",
+  "teams.update",
+  "users.update",
+  "users.promote",
+  "users.demote",
+  "users.signout",
+  "users.suspend",
+  "users.delete",
+  "userMemberships.update",
+];
+
+/**
+ * Minimal metadata for logging an event at info level, without the full event
+ * payload which may contain large document changes.
+ *
+ * @param event The event being logged.
+ * @returns The event name and identifiers, when present.
+ */
+function eventLogMeta(event: Event) {
+  return {
+    name: event.name,
+    ...("documentId" in event ? { documentId: event.documentId } : {}),
+    actorId: event.actorId,
+  };
+}
+
 export default async function init() {
   await initI18n();
 
@@ -43,9 +126,10 @@ export default async function init() {
         setResource(`Event.${event.name}`);
 
         Logger.info("worker", `Processing ${event.name}`, {
-          event,
+          ...eventLogMeta(event),
           attempt: job.attemptsMade,
         });
+        Logger.debug("worker", `Processing ${event.name}`, { event });
 
         // For each registered processor we check to see if it wants to handle the
         // event (applicableEvents), and if so add a new queued job specifically
@@ -63,7 +147,10 @@ export default async function init() {
             if (name === "WebsocketsProcessor") {
               // websockets are a special case on their own queue because they must
               // only be consumed by the websockets service rather than workers.
-              await websocketQueue().add(job.data);
+              // Events the processor would not handle are skipped entirely.
+              if (websocketApplicableEvents.includes(event.name)) {
+                await websocketQueue().add(job.data);
+              }
             } else if (
               ProcessorClass.applicableEvents.includes(event.name) ||
               ProcessorClass.applicableEvents.includes("*")
@@ -133,9 +220,12 @@ export default async function init() {
         const processor = new ProcessorClass();
 
         if (processor.perform) {
-          Logger.info("worker", `${name} running ${event.name}`, {
-            event,
-          });
+          Logger.info(
+            "worker",
+            `${name} running ${event.name}`,
+            eventLogMeta(event)
+          );
+          Logger.debug("worker", `${name} running ${event.name}`, { event });
 
           try {
             await processor.perform(event);

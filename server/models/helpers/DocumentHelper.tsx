@@ -1,4 +1,3 @@
-import type { JSDOM } from "jsdom";
 import { Node, Fragment, type NodeType } from "prosemirror-model";
 import ukkonen from "ukkonen";
 import { updateYFragment, yDocToProsemirrorJSON } from "y-prosemirror";
@@ -33,6 +32,9 @@ interface InlineSegment {
   /** Whether this segment is an atom node whose text length differs from nodeSize. */
   isAtom?: boolean;
 }
+
+/** A DOM document parsed by linkedom's `parseHTML`. */
+type ParsedDOMDocument = Window["document"];
 
 /** Context for a patch operation, shared across surgical patch methods. */
 interface PatchContext {
@@ -490,18 +492,11 @@ export class DocumentHelper {
       ...options,
       changes: changeset.changes,
     });
-    // Loaded lazily to keep jsdom off the startup path — only HTML export needs it.
-    const { JSDOM } = await import("jsdom");
-    const dom = new JSDOM(html);
-    try {
-      return DocumentHelper.clipEmailDiff(dom.window.document);
-    } finally {
-      try {
-        dom.window.close();
-      } catch (_err) {
-        // Best effort, closing the window releases its timers and resources.
-      }
-    }
+    // Parsed with linkedom, loaded lazily to keep it off the startup path —
+    // only HTML export needs it.
+    const { parseHTML } = await import("linkedom");
+    const dom = parseHTML(html);
+    return DocumentHelper.clipEmailDiff(dom.document);
   }
 
   /**
@@ -512,7 +507,7 @@ export class DocumentHelper {
    * @param doc The rendered diff document to clip.
    * @returns The clipped HTML, or undefined when there is nothing to show.
    */
-  private static clipEmailDiff(doc: JSDOM["window"]["document"]) {
+  private static clipEmailDiff(doc: ParsedDOMDocument) {
     const containsDiffElement = (node: Element | null) => {
       if (!node) {
         return false;

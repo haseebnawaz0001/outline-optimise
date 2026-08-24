@@ -1,0 +1,6 @@
+FROM node:24-slim
+COPY --from=outline:cpu /opt/outline /opt/outline
+ENV NODE_ENV=production MALLOC_ARENA_MAX=2 PORT=3000
+WORKDIR /opt/outline
+EXPOSE 3000
+CMD ["node", "build/server/index.js"]

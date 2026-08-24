@@ -1,0 +1,9 @@
+{
+  "idle": {
+    "windowSec": 60,
+    "rssSamples": 10,
+    "rssAvgMB": 399.2,
+    "rssMaxMB": 399.4,
+    "redisOpsPerMin": 246
+  }
+}

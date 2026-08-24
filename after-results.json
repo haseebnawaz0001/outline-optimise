@@ -1,0 +1,185 @@
+{
+"home_c8": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 8,
+    "seconds": 45
+  },
+  "count": 7315,
+  "rps": 162.6,
+  "p50ms": 45.8,
+  "p90ms": 62.2,
+  "p95ms": 70.8,
+  "p99ms": 113.1,
+  "maxMs": 358.2,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 7315
+  }
+}, "health_after": "200", "app_restarts_oom": "0 false", "pg_err_lines": 0, "redis": "rejected_connections:0 " }
+,
+"home_c16": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 16,
+    "seconds": 45
+  },
+  "count": 7762,
+  "rps": 172.5,
+  "p50ms": 87.4,
+  "p90ms": 111.3,
+  "p95ms": 122.7,
+  "p99ms": 216,
+  "maxMs": 531.8,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 7762
+  }
+}, "health_after": "200", "app_restarts_oom": "0 false", "pg_err_lines": 0, "redis": "rejected_connections:0 " }
+,
+"home_c32": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 32,
+    "seconds": 45
+  },
+  "count": 8392,
+  "rps": 186.5,
+  "p50ms": 163.7,
+  "p90ms": 193.8,
+  "p95ms": 208.2,
+  "p99ms": 469.6,
+  "maxMs": 515.8,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 8392
+  }
+}, "health_after": "200", "app_restarts_oom": "0 false", "pg_err_lines": 0, "redis": "rejected_connections:0 " }
+,
+"home_c48": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 48,
+    "seconds": 45
+  },
+  "count": 8173,
+  "rps": 181.6,
+  "p50ms": 252.8,
+  "p90ms": 282.1,
+  "p95ms": 321.6,
+  "p99ms": 588.5,
+  "maxMs": 724.6,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 8173
+  }
+}, "health_after": "200", "app_restarts_oom": "0 false", "pg_err_lines": 0, "redis": "rejected_connections:0 " }
+,
+"home_c64": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 64,
+    "seconds": 45
+  },
+  "count": 8349,
+  "rps": 185.5,
+  "p50ms": 328.5,
+  "p90ms": 366,
+  "p95ms": 412.9,
+  "p99ms": 679.9,
+  "maxMs": 1668.4,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 8349
+  }
+}, "health_after": "200", "app_restarts_oom": "0 false", "pg_err_lines": 0, "redis": "rejected_connections:0 " }
+,
+"home_c96": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 96,
+    "seconds": 45
+  },
+  "count": 8207,
+  "rps": 182.4,
+  "p50ms": 503.8,
+  "p90ms": 557.6,
+  "p95ms": 826.3,
+  "p99ms": 874.1,
+  "maxMs": 2153.8,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 8207
+  }
+}, "health_after": "200", "app_restarts_oom": "0 false", "pg_err_lines": 0, "redis": "rejected_connections:0 " }
+,
+"home_c128": {"result": {
+  "level": {
+    "path": "/",
+    "concurrency": 128,
+    "seconds": 45
+  },
+  "count": 8216,
+  "rps": 182.6,
+  "p50ms": 674.9,
+  "p90ms": 780.7,
+  "p95ms": 985.6,
+  "p99ms": 1041.7,
+  "maxMs": 3211.7,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 8216
+  }
+}, "health_after": "200", "app_restarts_oom": "0 false", "pg_err_lines": 0, "redis": "rejected_connections:0 " }
+,
+"pgprobe_c64": {"result": {
+  "level": {
+    "path": "/_health",
+    "concurrency": 64,
+    "seconds": 30
+  },
+  "count": 40226,
+  "rps": 1340.9,
+  "p50ms": 43.6,
+  "p90ms": 66.2,
+  "p95ms": 76.9,
+  "p99ms": 101.3,
+  "maxMs": 255,
+  "errors": {
+    "timeout": 0,
+    "e5xx": 0,
+    "other": 0
+  },
+  "statusCounts": {
+    "200": 40226
+  }
+}, "health_after": "200", "app_restarts_oom": "0 false", "pg_err_lines": 0, "redis": "rejected_connections:0 " }
+}

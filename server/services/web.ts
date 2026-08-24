@@ -1,5 +1,6 @@
 /* oxlint-disable @typescript-eslint/no-var-requires */
 import { Server } from "node:https";
+import { constants as zlibConstants } from "node:zlib";
 import type { BaseContext } from "koa";
 import Koa from "koa";
 import compress from "koa-compress";
@@ -9,13 +10,10 @@ import enforceHttps, {
   httpsResolver,
   xForwardedProtoResolver,
 } from "koa-sslify";
-import { Second } from "@shared/utils/time";
 import env from "@server/env";
 import Logger from "@server/logging/Logger";
-import Metrics from "@server/logging/Metrics";
 import csp from "@server/middlewares/csp";
 import { attachCSRFToken } from "@server/middlewares/csrf";
-import ShutdownHelper, { ShutdownOrder } from "@server/utils/ShutdownHelper";
 import { initI18n } from "@server/utils/i18n";
 import routes from "../routes";
 import api from "../routes/api";
@@ -69,23 +67,16 @@ export default function init(app: Koa = new Koa(), server?: Server) {
   // Make `ctx.userAgent` available
   app.use<BaseContext, UserAgentContext>(userAgent);
 
-  app.use(compress());
-
-  // Monitor server connections
-  if (server) {
-    setInterval(() => {
-      server.getConnections((err, count) => {
-        if (err) {
-          return;
-        }
-        Metrics.gaugePerInstance("connections.count", count);
-      });
-    }, 5 * Second.ms).unref();
-  }
-
-  ShutdownHelper.add("connections", ShutdownOrder.normal, async () => {
-    Metrics.gaugePerInstance("connections.count", 0);
-  });
+  app.use(
+    compress({
+      threshold: 2048,
+      br: {
+        params: {
+          [zlibConstants.BROTLI_PARAM_QUALITY]: 3,
+        },
+      },
+    })
+  );
 
   app.use(mount("/api", api));
   app.use(mount("/mcp", mcp));

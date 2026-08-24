@@ -1,0 +1,7 @@
+services:
+  postgres:
+    cpus: 1.0
+    mem_limit: 500m
+  redis:
+    cpus: 1.0
+    mem_limit: 500m

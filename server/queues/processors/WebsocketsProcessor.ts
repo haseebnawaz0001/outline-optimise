@@ -1,5 +1,7 @@
 import { compact, concat, uniq, uniqBy } from "es-toolkit/compat";
 import type { Server } from "socket.io";
+import { toError } from "@shared/utils/error";
+import Logger from "@server/logging/Logger";
 import {
   Comment,
   Document,
@@ -36,7 +38,26 @@ import {
   presentImport,
 } from "@server/presenters";
 import presentNotification from "@server/presenters/notification";
-import type { Event } from "../../types";
+import type { DocumentEvent, Event } from "../../types";
+
+interface CoalescedUpdate {
+  timer: NodeJS.Timeout;
+  latestEvent: DocumentEvent;
+}
+
+/**
+ * The window within which repeated `documents.update` events for the same
+ * document are coalesced into a single broadcast.
+ */
+const COALESCE_MS = 1000;
+
+/**
+ * Trailing-edge coalescing of `documents.update` events, keyed by documentId.
+ * Entries are transient (they live at most COALESCE_MS) and shared across
+ * processor instances so bursts of persisted saves collapse into a single
+ * presentation and fan-out per document.
+ */
+const coalescedUpdates = new Map<string, CoalescedUpdate>();
 
 export default class WebsocketsProcessor {
   public async perform(event: Event, socketio: Server) {
@@ -212,17 +233,14 @@ export default class WebsocketsProcessor {
       }
 
       case "documents.archive":
-      case "documents.delete":
+      case "documents.delete": {
+        return this.handleDocumentUpdate(event, socketio);
+      }
+
       case "documents.update": {
-        const document = await Document.findByPk(event.documentId, {
-          paranoid: false,
-        });
-        if (!document) {
-          return;
-        }
-        const data = await presentDocument(undefined, document);
-        const channels = await this.getDocumentEventChannels(event, document);
-        return socketio.to(channels).emit(event.name, data);
+        // Persisted saves arrive in bursts while editing (hocuspocus persists
+        // every few seconds), so coalesce them and only broadcast the latest.
+        return this.coalesceDocumentUpdate(event, socketio);
       }
 
       case "documents.move": {
@@ -1017,6 +1035,73 @@ export default class WebsocketsProcessor {
       default:
         return;
     }
+  }
+
+  /**
+   * Coalesces bursts of `documents.update` events for the same document so
+   * only the most recent event is processed, at most COALESCE_MS after the
+   * first event of the burst arrived. The timer is not restarted by later
+   * events in the window; they only replace the event to be processed.
+   *
+   * @param event The document update event that was received.
+   * @param socketio The socket.io server used to broadcast once the window elapses.
+   */
+  private coalesceDocumentUpdate(event: DocumentEvent, socketio: Server) {
+    const documentId = event.documentId;
+
+    // A window is already open for this document, keep only the latest event.
+    const pending = coalescedUpdates.get(documentId);
+    if (pending) {
+      pending.latestEvent = event;
+      return;
+    }
+
+    const timer: NodeJS.Timeout = setTimeout(() => {
+      const entry = coalescedUpdates.get(documentId);
+      // Delete the entry before processing so events arriving while the
+      // latest is being handled open a fresh window rather than being lost.
+      coalescedUpdates.delete(documentId);
+      if (!entry) {
+        return;
+      }
+
+      this.handleDocumentUpdate(entry.latestEvent, socketio).catch((error) => {
+        Logger.error(
+          "Error processing coalesced websocket event",
+          toError(error),
+          {
+            event: entry.latestEvent,
+          }
+        );
+      });
+    }, COALESCE_MS);
+
+    coalescedUpdates.set(documentId, { timer, latestEvent: event });
+  }
+
+  /**
+   * Broadcasts a document change to every channel with visibility of the
+   * document. This is the shared handler for `documents.archive`,
+   * `documents.delete` and coalesced `documents.update` events.
+   *
+   * @param event The document event to broadcast.
+   * @param socketio The socket.io server to emit on.
+   * @return A promise resolving when the event has been emitted.
+   */
+  private async handleDocumentUpdate(
+    event: DocumentEvent,
+    socketio: Server
+  ): Promise<unknown> {
+    const document = await Document.findByPk(event.documentId, {
+      paranoid: false,
+    });
+    if (!document) {
+      return undefined;
+    }
+
+    const data = await presentDocument(undefined, document);
+    const channels = await this.getDocumentEventChannels(event, document);
+    return socketio.to(channels).emit(event.name, data);
   }
 
   private getCollectionEventChannels(

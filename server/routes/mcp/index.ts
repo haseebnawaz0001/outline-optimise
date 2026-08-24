@@ -13,7 +13,6 @@ import env from "@server/env";
 import Logger from "@server/logging/Logger";
 import auth from "@server/middlewares/authentication";
 import { rateLimiter } from "@server/middlewares/rateLimiter";
-import requestTracer from "@server/middlewares/requestTracer";
 import { UserFlag } from "@server/models/User";
 import { AuthenticationType } from "@server/types";
 import { RateLimiterStrategy } from "@server/utils/RateLimiter";
@@ -222,7 +221,6 @@ router.delete("/", async (ctx) => {
   ctx.body = { error: "Method not allowed. Use POST for MCP requests." };
 });
 
-app.use(requestTracer());
 app.use(bodyParser());
 app.use(router.routes());
 

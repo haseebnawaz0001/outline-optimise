@@ -1,0 +1,82 @@
+import type { InferAttributes, InferCreationAttributes } from "sequelize";
+import {
+  AfterCreate,
+  AfterDestroy,
+  BelongsTo,
+  ForeignKey,
+  Column,
+  Table,
+  DataType,
+  Scopes,
+} from "sequelize-typescript";
+import { GroupPermission } from "@shared/types";
+import Document from "./Document";
+import Group from "./Group";
+import User from "./User";
+import Model from "./base/Model";
+
+@Scopes(() => ({
+  withGroup: {
+    include: [
+      {
+        association: "group",
+      },
+    ],
+  },
+  withUser: {
+    include: [
+      {
+        association: "user",
+      },
+    ],
+  },
+}))
+@Table({ tableName: "group_users", modelName: "group_user" })
+class GroupUser extends Model<
+  InferAttributes<GroupUser>,
+  Partial<InferCreationAttributes<GroupUser>>
+> {
+  static eventNamespace = "groups";
+
+  @BelongsTo(() => User, "userId")
+  user: User;
+
+  @ForeignKey(() => User)
+  @Column(DataType.UUID)
+  userId: string;
+
+  @BelongsTo(() => Group, "groupId")
+  group: Group;
+
+  @ForeignKey(() => Group)
+  @Column(DataType.UUID)
+  groupId: string;
+
+  @BelongsTo(() => User, "createdById")
+  createdBy: User;
+
+  @ForeignKey(() => User)
+  @Column(DataType.UUID)
+  createdById: string;
+
+  @Column(DataType.ENUM(...Object.values(GroupPermission)))
+  permission: GroupPermission;
+
+  get modelId() {
+    return this.groupId;
+  }
+
+  // hooks
+
+  @AfterCreate
+  static async invalidateDocumentIdsAfterCreate(model: GroupUser) {
+    await Document.invalidateMembershipDocumentIds([model.userId]);
+  }
+
+  @AfterDestroy
+  static async invalidateDocumentIdsAfterDestroy(model: GroupUser) {
+    await Document.invalidateMembershipDocumentIds([model.userId]);
+  }
+}
+
+export default GroupUser;

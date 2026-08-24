@@ -28,6 +28,45 @@ import User from "./User";
 import IdModel from "./base/IdModel";
 import type { Context } from "koa";
 
+/** The maximum serialized length of a single value within enqueued event changes. */
+const MAX_ENQUEUED_VALUE_LENGTH = 8192;
+
+/** The placeholder that replaces oversized values in enqueued event changes. */
+const STRIPPED_VALUE = "[stripped]";
+
+/**
+ * Recursively walks the given value and replaces any value whose serialized
+ * form exceeds MAX_ENQUEUED_VALUE_LENGTH with a placeholder string. Values
+ * below the limit are returned untouched.
+ *
+ * @param value The value to walk.
+ * @returns The value with any oversized entries replaced by "[stripped]".
+ */
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
+function stripOversizedValues(value: any): any {
+  if (value === undefined) {
+    return value;
+  }
+
+  if (JSON.stringify(value).length <= MAX_ENQUEUED_VALUE_LENGTH) {
+    return value;
+  }
+
+  if (typeof value !== "object") {
+    return STRIPPED_VALUE;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(stripOversizedValues);
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(value)) {
+    result[key] = stripOversizedValues(val);
+  }
+  return result;
+}
+
 @Table({ tableName: "events", modelName: "event", updatedAt: false })
 class Event extends IdModel<
   InferAttributes<Event>,
@@ -77,6 +116,28 @@ class Event extends IdModel<
     model.ip = normalizeIp(model.ip);
   }
 
+  /**
+   * Prepare an event for enqueueing by replacing oversized values in `changes`
+   * with a placeholder, so that large document payloads never reach the queue.
+   * This runs after persistence and only affects the queued copy of the event,
+   * the database record is left untouched.
+   *
+   * @param model The event to prepare for the queue.
+   * @returns The same event instance with oversized change values stripped.
+   */
+  static stripForQueue(model: Event): Event {
+    const { attributes, previous } = model.changes ?? {};
+    if (!attributes && !previous) {
+      return model;
+    }
+
+    model.changes = {
+      attributes: attributes ? stripOversizedValues(attributes) : attributes,
+      previous: previous ? stripOversizedValues(previous) : previous,
+    };
+    return model;
+  }
+
   @AfterSave
   static async enqueue(
     model: Event,
@@ -87,11 +148,11 @@ class Event extends IdModel<
       // We want to use the parent transaction, otherwise the 'afterCommit' hook will never fire in this case.
       // See: https://github.com/sequelize/sequelize/issues/17452
       (options.transaction.parent || options.transaction).afterCommit(
-        () => void globalEventQueue().add(model)
+        () => void globalEventQueue().add(Event.stripForQueue(model))
       );
       return;
     }
-    void globalEventQueue().add(model);
+    void globalEventQueue().add(Event.stripForQueue(model));
   }
 
   // associations
@@ -138,10 +199,12 @@ class Event extends IdModel<
   static schedule(event: Partial<Event>) {
     const now = new Date();
     return globalEventQueue().add(
-      this.build({
-        createdAt: now,
-        ...event,
-      })
+      Event.stripForQueue(
+        this.build({
+          createdAt: now,
+          ...event,
+        })
+      )
     );
   }
 

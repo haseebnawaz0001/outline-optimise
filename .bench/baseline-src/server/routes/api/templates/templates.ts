@@ -1,0 +1,358 @@
+import Router from "koa-router";
+import type { WhereOptions } from "sequelize";
+import { Op, Sequelize } from "sequelize";
+import { ProsemirrorDataHelper } from "@shared/utils/ProsemirrorDataHelper";
+import { ValidationError } from "@server/errors";
+import auth from "@server/middlewares/authentication";
+import { rateLimiter } from "@server/middlewares/rateLimiter";
+import { transaction } from "@server/middlewares/transaction";
+import validate from "@server/middlewares/validate";
+import { Collection, Template } from "@server/models";
+import { authorize } from "@server/policies";
+import { presentPolicies, presentTemplate } from "@server/presenters";
+import type { APIContext } from "@server/types";
+import { RateLimiterStrategy } from "@server/utils/RateLimiter";
+import { QueryHelper } from "@server/storage/QueryHelper";
+import pagination from "../middlewares/pagination";
+import * as T from "./schema";
+
+const router = new Router();
+
+router.post(
+  "templates.create",
+  auth(),
+  rateLimiter(RateLimiterStrategy.TwentyFivePerMinute),
+  validate(T.TemplatesCreateSchema),
+  transaction(),
+  async (ctx: APIContext<T.TemplatesCreateReq>) => {
+    const { id, title, data, icon, color, collectionId, publish } =
+      ctx.input.body;
+    const editorVersion = ctx.headers["x-editor-version"] as string | undefined;
+
+    const { transaction } = ctx.state;
+    const { user } = ctx.state.auth;
+
+    if (publish && (!data || ProsemirrorDataHelper.isEmpty(data))) {
+      throw ValidationError("A published template must have content");
+    }
+
+    let collection;
+    if (collectionId) {
+      collection = await Collection.findByPk(collectionId, {
+        userId: user.id,
+        transaction,
+      });
+      authorize(user, "createTemplate", collection);
+    } else {
+      authorize(user, "createTemplate", user.team);
+    }
+
+    let template = await Template.createWithCtx(ctx, {
+      id,
+      title: title ?? "",
+      icon,
+      color,
+      content: data ?? null,
+      collectionId: collection?.id,
+      publishedAt: publish ? new Date() : null,
+      createdById: user.id,
+      lastModifiedById: user.id,
+      teamId: user.teamId,
+      editorVersion,
+    });
+
+    template = await Template.findByPk(template.id, {
+      userId: user.id,
+      rejectOnEmpty: true,
+      transaction,
+    });
+
+    ctx.body = {
+      data: presentTemplate(template),
+      policies: presentPolicies(user, [template]),
+    };
+  }
+);
+
+router.post(
+  "templates.list",
+  auth(),
+  pagination(),
+  validate(T.TemplatesListSchema),
+  async (ctx: APIContext<T.TemplatesListReq>) => {
+    const { sort, direction, collectionId, query } = ctx.input.body;
+    const { user } = ctx.state.auth;
+    const where: WhereOptions<Template> & {
+      [Op.and]: WhereOptions<Template>[];
+    } = {
+      teamId: user.teamId,
+      [Op.and]: [
+        {
+          deletedAt: {
+            [Op.eq]: null,
+          },
+        },
+        // drafts are only visible to the user that created them
+        {
+          [Op.or]: [
+            {
+              publishedAt: {
+                [Op.ne]: null,
+              },
+            },
+            {
+              createdById: user.id,
+            },
+          ],
+        },
+      ],
+    };
+
+    // if a specific collection is passed then we need to check auth to view it
+    if (collectionId) {
+      where[Op.and].push({ collectionId });
+      const collection = await Collection.findByPk(collectionId, {
+        userId: user.id,
+      });
+      authorize(user, "read", collection);
+    } else {
+      where[Op.and].push({
+        [Op.or]: [
+          {
+            collectionId: {
+              [Op.eq]: null,
+            },
+          },
+          {
+            collectionId: await user.collectionIds(),
+          },
+        ],
+      });
+    }
+
+    if (query) {
+      where[Op.and].push(
+        Sequelize.literal(
+          `unaccent(LOWER("template"."title")) like unaccent(LOWER(:query))`
+        )
+      );
+    }
+
+    const replacements = { query: QueryHelper.likeContains(query ?? "") };
+
+    const [templates, total] = await Promise.all([
+      Template.scope([
+        "defaultScope",
+        {
+          method: ["withMembership", user.id],
+        },
+      ]).findAll({
+        where,
+        replacements,
+        order: [[sort, direction]],
+        offset: ctx.state.pagination.offset,
+        limit: ctx.state.pagination.limit,
+      }),
+      Template.count({
+        where,
+        // @ts-expect-error Types are incorrect for count
+        replacements,
+      }),
+    ]);
+
+    const data = templates.map((template) => presentTemplate(template));
+    const policies = presentPolicies(user, templates);
+
+    ctx.body = {
+      pagination: { ...ctx.state.pagination, total },
+      data,
+      policies,
+    };
+  }
+);
+
+router.post(
+  "templates.info",
+  auth(),
+  validate(T.TemplatesInfoSchema),
+  async (ctx: APIContext<T.TemplatesInfoReq>) => {
+    const { id } = ctx.input.body;
+    const { user } = ctx.state.auth;
+
+    const template = await Template.findByPk(id, {
+      userId: user.id,
+      rejectOnEmpty: true,
+    });
+    authorize(user, "read", template);
+
+    ctx.body = {
+      data: presentTemplate(template),
+      policies: presentPolicies(user, [template]),
+    };
+  }
+);
+
+router.post(
+  "templates.delete",
+  auth(),
+  validate(T.TemplatesDeleteSchema),
+  transaction(),
+  async (ctx: APIContext<T.TemplatesDeleteReq>) => {
+    const { id } = ctx.input.body;
+    const { user } = ctx.state.auth;
+    const { transaction } = ctx.state;
+
+    const template = await Template.findByPk(id, {
+      userId: user.id,
+      rejectOnEmpty: true,
+      transaction,
+    });
+    authorize(user, "delete", template);
+
+    await template.destroyWithCtx(ctx);
+
+    ctx.body = {
+      success: true,
+    };
+  }
+);
+
+router.post(
+  "templates.restore",
+  auth(),
+  validate(T.TemplatesInfoSchema),
+  transaction(),
+  async (ctx: APIContext<T.TemplatesInfoReq>) => {
+    const { id } = ctx.input.body;
+    const { user } = ctx.state.auth;
+    const { transaction } = ctx.state;
+
+    const template = await Template.findByPk(id, {
+      userId: user.id,
+      rejectOnEmpty: true,
+      transaction,
+      paranoid: false,
+    });
+    authorize(user, "restore", template);
+
+    await template.restoreWithCtx(ctx);
+
+    ctx.body = {
+      data: presentTemplate(template),
+      policies: presentPolicies(user, [template]),
+    };
+  }
+);
+
+router.post(
+  "templates.duplicate",
+  auth(),
+  validate(T.TemplatesDuplicateSchema),
+  transaction(),
+  async (ctx: APIContext<T.TemplatesDuplicateReq>) => {
+    const { transaction } = ctx.state;
+    const { id, title, collectionId } = ctx.input.body;
+    const { user } = ctx.state.auth;
+
+    const original = await Template.findByPk(id, {
+      userId: user.id,
+      rejectOnEmpty: true,
+      transaction,
+    });
+    authorize(user, "duplicate", original);
+
+    const targetCollectionId =
+      collectionId === undefined ? original.collectionId : collectionId;
+    if (targetCollectionId) {
+      const collection = await Collection.findByPk(targetCollectionId, {
+        userId: user.id,
+        transaction,
+      });
+      authorize(user, "createTemplate", collection);
+    } else {
+      authorize(user, "createTemplate", user.team);
+    }
+
+    let template = await Template.createWithCtx(ctx, {
+      title: title ?? original.title,
+      createdById: user.id,
+      lastModifiedById: user.id,
+      teamId: user.teamId,
+      collectionId: targetCollectionId,
+      publishedAt: original.isDraft ? null : new Date(),
+      content: original.content,
+      icon: original.icon,
+      color: original.color,
+      fullWidth: original.fullWidth,
+    });
+
+    // reload to get all of the data needed to present (user, collection etc)
+    template = await Template.findByPk(template.id, {
+      userId: user.id,
+      rejectOnEmpty: true,
+      transaction,
+    });
+
+    ctx.body = {
+      data: presentTemplate(template),
+      policies: presentPolicies(user, [template]),
+    };
+  }
+);
+
+router.post(
+  "templates.update",
+  auth(),
+  validate(T.TemplatesUpdateSchema),
+  transaction(),
+  async (ctx: APIContext<T.TemplatesUpdateReq>) => {
+    const { transaction } = ctx.state;
+    const { id, data, publish, ...updatedFields } = ctx.input.body;
+    const { user } = ctx.state.auth;
+
+    const template = await Template.findByPk(id, {
+      userId: user.id,
+      rejectOnEmpty: true,
+      transaction,
+    });
+    authorize(user, "update", template);
+
+    if (updatedFields.collectionId !== undefined) {
+      if (updatedFields.collectionId) {
+        const collection = await Collection.findByPk(
+          updatedFields.collectionId,
+          {
+            userId: user.id,
+            transaction,
+          }
+        );
+        authorize(user, "createTemplate", collection);
+      } else {
+        authorize(user, "createTemplate", user.team);
+      }
+    }
+
+    if (data) {
+      template.content = data;
+    }
+
+    if (publish && template.isDraft) {
+      if (
+        !template.content ||
+        ProsemirrorDataHelper.isEmpty(template.content)
+      ) {
+        throw ValidationError("A published template must have content");
+      }
+      template.publishedAt = new Date();
+    }
+
+    await template.updateWithCtx(ctx, updatedFields);
+
+    ctx.body = {
+      data: presentTemplate(template),
+      policies: presentPolicies(user, [template]),
+    };
+  }
+);
+
+export default router;

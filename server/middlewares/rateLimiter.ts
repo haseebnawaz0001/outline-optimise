@@ -61,6 +61,12 @@ async function getRateLimiterIdentifiers(ctx: AppContext): Promise<string[]> {
  */
 export function defaultRateLimiter() {
   return async function rateLimiterMiddleware(ctx: AppContext, next: Next) {
+    // Health checks are excluded from rate limiting entirely – load balancers
+    // poll them frequently and must never exhaust quota or be rejected.
+    if (ctx.path === "/_health") {
+      return next();
+    }
+
     if (!env.RATE_LIMITER_ENABLED) {
       return next();
     }

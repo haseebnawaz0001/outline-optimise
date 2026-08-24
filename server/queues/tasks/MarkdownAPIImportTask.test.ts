@@ -1,7 +1,24 @@
+import path from "node:path";
 import {
+  AttachmentReferenceIndex,
   rewriteAttachmentPaths,
   rewriteInternalLinks,
 } from "./MarkdownAPIImportTask";
+import type { MarkdownAttachmentManifestItem } from "@shared/schema";
+
+/**
+ * The original implementation this optimization must remain equivalent to.
+ */
+const naiveAttachmentsReferencedBy = (
+  markdown: string,
+  manifest: MarkdownAttachmentManifestItem[]
+): MarkdownAttachmentManifestItem[] =>
+  manifest.filter((item) => {
+    const fileName = path.basename(item.pathInZip);
+    return (
+      markdown.includes(fileName) || markdown.includes(encodeURI(fileName))
+    );
+  });
 
 describe("rewriteAttachmentPaths", () => {
   it("replaces a direct encoded path with the placeholder", () => {
@@ -77,6 +94,109 @@ describe("rewriteAttachmentPaths", () => {
       { id: "id-a", pathInZip: "C/attachments/local.png" },
     ]);
     expect(out).toBe(`![x](${signedUrl})`);
+  });
+
+  it("produces identical output when called repeatedly with cached patterns", () => {
+    const markdown =
+      "![a](./attachments/a.png) ![b](My%20Doc/images/b.png) ![c](C/uploads/legacy/c.png)";
+    const attachments = [
+      { id: "id-a", pathInZip: "C/attachments/a.png" },
+      { id: "id-b", pathInZip: "C/Doc/images/b.png" },
+      { id: "id-c", pathInZip: "C/uploads/legacy/c.png" },
+    ];
+
+    const first = rewriteAttachmentPaths(markdown, attachments);
+    const second = rewriteAttachmentPaths(markdown, attachments);
+    expect(second).toBe(first);
+    expect(first).toMatchInlineSnapshot(
+      `"![a](<<id-a>>) ![b](My%20Doc<<id-b>>) ![c](<<id-c>>)"`
+    );
+  });
+});
+
+describe("AttachmentReferenceIndex", () => {
+  const manifest: MarkdownAttachmentManifestItem[] = [
+    {
+      id: "m1",
+      name: "a.png",
+      pathInZip: "C/attachments/a.png",
+      mimeType: "image/png",
+    },
+    {
+      id: "m2",
+      name: "ca.png",
+      pathInZip: "C/attachments/ca.png",
+      mimeType: "image/png",
+    },
+    {
+      id: "m3",
+      name: "logo.png",
+      pathInZip: "C/images/logo.png",
+      mimeType: "image/png",
+    },
+    {
+      // Same basename as m3 but a different directory; both must resolve.
+      id: "m4",
+      name: "logo.png",
+      pathInZip: "Other/docs/logo.png",
+      mimeType: "image/png",
+    },
+    {
+      id: "m5",
+      name: "my diagram.svg",
+      pathInZip: "C/diagrams/my diagram.svg",
+      mimeType: "image/svg+xml",
+    },
+    {
+      // Case differs from every reference below and must never match.
+      id: "m6",
+      name: "LOGO.PNG",
+      pathInZip: "C/images/LOGO.PNG",
+      mimeType: "image/png",
+    },
+  ];
+
+  const markdownFixtures = [
+    "",
+    "no references here at all",
+    "![first](./attachments/a.png)",
+    "overlapping: ca.png and a.png in one line",
+    "encoded only: C/images/logo%20variant.png",
+    "encoded space: ./diagrams/my%20diagram.svg",
+    "raw space: diagrams/my diagram.svg",
+    "case must not match: logo.png vs LOGO.PNG",
+    "substring semantics: footnote.md2 mentions note.md",
+    "all of them: a.png ca.png logo.png my%20diagram.svg LOGO.PNG note.md",
+  ];
+
+  it("matches the naive manifest filter on fixtures", () => {
+    const index = new AttachmentReferenceIndex(manifest);
+
+    for (const markdown of markdownFixtures) {
+      expect(index.referencedBy(markdown)).toEqual(
+        naiveAttachmentsReferencedBy(markdown, manifest)
+      );
+    }
+  });
+
+  it("returns entries in manifest order regardless of mention order", () => {
+    const index = new AttachmentReferenceIndex(manifest);
+    const result = index.referencedBy("ca.png then a.png then LOGO.PNG");
+    expect(result.map((item) => item.id)).toEqual(["m1", "m2", "m6"]);
+    expect(result).toEqual(
+      naiveAttachmentsReferencedBy("ca.png then a.png then LOGO.PNG", manifest)
+    );
+  });
+
+  it("resolves duplicate basenames to every manifest entry sharing the name", () => {
+    const index = new AttachmentReferenceIndex(manifest);
+    const result = index.referencedBy("see images/logo.png");
+    expect(result.map((item) => item.id)).toEqual(["m3", "m4"]);
+  });
+
+  it("returns an empty array when the manifest is empty", () => {
+    const index = new AttachmentReferenceIndex([]);
+    expect(index.referencedBy("a.png")).toEqual([]);
   });
 });
 
