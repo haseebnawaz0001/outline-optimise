@@ -2,7 +2,6 @@ import { partition, uniqBy } from "es-toolkit/compat";
 import { UserRole } from "@shared/types";
 import InviteEmail from "@server/emails/templates/InviteEmail";
 import env from "@server/env";
-import Logger from "@server/logging/Logger";
 import { User, Team } from "@server/models";
 import { UserFlag } from "@server/models/User";
 import type { APIContext } from "@server/types";
@@ -106,15 +105,6 @@ export default async function userInviter(
         teamName: team.name,
         teamUrl: team.url,
       }).schedule();
-    }
-
-    if (env.isDevelopment) {
-      Logger.info(
-        "email",
-        `Sign in immediately: ${
-          env.URL
-        }/auth/email.callback?token=${newUser.getEmailSigninToken(ctx)}`
-      );
     }
   }
 

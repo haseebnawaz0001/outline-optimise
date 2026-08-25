@@ -12,7 +12,6 @@ import ConfirmUserDeleteEmail from "@server/emails/templates/ConfirmUserDeleteEm
 import InviteEmail from "@server/emails/templates/InviteEmail";
 import env from "@server/env";
 import { ValidationError } from "@server/errors";
-import logger from "@server/logging/Logger";
 import auth from "@server/middlewares/authentication";
 import { rateLimiter } from "@server/middlewares/rateLimiter";
 import { transaction } from "@server/middlewares/transaction";
@@ -599,15 +598,6 @@ router.post(
 
     user.incrementFlag(UserFlag.InviteSent);
     await user.save({ transaction });
-
-    if (env.isDevelopment) {
-      logger.info(
-        "email",
-        `Sign in immediately: ${
-          env.URL
-        }/auth/email.callback?token=${user.getEmailSigninToken(ctx)}`
-      );
-    }
 
     ctx.body = {
       success: true,
