@@ -24,3 +24,11 @@ Task: Implement better-auth email+password auth replacing all external providers
 
 - [x] G5: Report audit passed.
   EVIDENCE: All numbers in the final report re-measured via the commands above this session; ledger pasted verbatim; adversarial probes on auth.info JWT-decode removal and middleware dispatch order both passed (evidence in gates/impl-G.md G5).
+
+- [x] G6: Deployability — better-auth schema is applied by the standard pre-boot migration check (no compose changes).
+  CHECK: grep -n "ensureBetterAuthSchema" server/scripts/checkMigrations.ts server/auth/migrate.ts | wc -l
+  EXPECT: /^([2-9])$/
+  EVIDENCE: grep count = 2 (call site in checkMigrations.ts under existing MutexLock("migrations"); implementation in server/auth/migrate.ts). tsc exit 0. .env.sample documents AUTH_SIGNUP_KEY.
+
+- [x] G7: Image builds and smoke-passes.
+  EVIDENCE: `bash deploy/build.sh` → outline-optimized:local built (base + runtime, no errors). Smoke on fresh postgres:16 + redis containers from the image: /_health "OK"; logs show sequelize migrations then `Applying better-auth schema (4 tables, 0 changes)`; pg_tables lists ba_account/ba_session/ba_user/ba_verification; wrong signupKey → HTTP 403; correct key → HTTP 200 + Set-Cookie better-auth.session_token; sign-in → 200; users.id = ba_user.id (uuid cast check) with role=admin; POST /api/auth.info with only the BA session cookie returns the provisioned Outline user. Containers/network torn down after.

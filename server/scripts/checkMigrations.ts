@@ -5,6 +5,7 @@ import { toError, errToString } from "@shared/utils/error";
 import { Minute } from "@shared/utils/time";
 import env from "@server/env";
 import Logger from "@server/logging/Logger";
+import { ensureBetterAuthSchema } from "@server/auth/migrate";
 import AuthenticationProvider from "@server/models/AuthenticationProvider";
 import Team from "@server/models/Team";
 import {
@@ -43,6 +44,7 @@ async function checkPendingMigrations() {
       }
     }
     await checkDataMigrations();
+    await ensureBetterAuthSchema();
   } catch (err) {
     const message = errToString(err);
     const error = toError(err);
