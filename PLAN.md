@@ -1,67 +1,94 @@
-# Gates: Implementation of optimization tiers (tree 5)
+# PLAN: Replace external auth providers with better-auth (email+password only)
 
-Scope: implement OPTIMIZATION_REPORT.md items B12, A1, A2, A3, A5, B13, B14, A14, B10, B11,
-C5, C1. Prove with: full test suites vs recorded baseline, tsc/lint, dockerized deploy +
-stress test BEFORE and AFTER changes.
+Status log appended at bottom; do not rewrite sections above it.
 
-## Contract
-- Driver owns cross-cutting files exclusively: server/env.ts, package.json, yarn.lock,
-  .env.sample, OPTIMIZATION_REPORT.md.
-- Leaf T owns: server/utils/updates.ts(del), server/main.ts, server/logging/{Metrics,tracing,tracer}.ts,
-  server/queues/queue.ts, server/services/web.ts, server/middlewares/requestTracer.ts(del),
-  routes mounts {api,mcp,oauth}/index.ts.
-- Leaf E owns: server/index.ts, server/collaboration/ViewsExtension.ts,
-  server/queues/processors/SearchIndexProcessor.ts(+spec).
-- Leaf D owns: BacklinksProcessor.ts(+spec), RevisionCreatedNotificationsTask.ts(+spec).
-- Leaf L owns: plugins/{gitlab,github,linear,notion}/server/** value-import lazification;
-  ProsemirrorHelper.tsx, DocumentHelper.tsx, DocumentConverter.tsx/.ts linkedom swap.
-- No leaf edits outside its list. Leaves run TARGETED vitest specs only; full suites are driver's.
+## Scope (user-confirmed)
 
-## Status log (append only)
-- [t0] Task started. Snapshot baseline-src from HEAD (25MB). Old audit ledger archived to
-  /tmp/opencode/audit-gates/.
-- [t1] Env facts: docker 29.6.1, compose v5.3.0, 4 cores / 7.6GB RAM host (B12 cap=cpus here,
-  delta expected ~0 locally — verify logic + note). yarn absent → corepack yarn install running.
-  linkedom@0.18.13 to be added by driver pre-dispatch. Debounce chain confirmed:
-  documents.update ->(.delayed +5min) ->(.debounced); Event union has both; RevisionsProcessor
-  already consumes .debounced. shouldQueue checked BEFORE job creation in globalEventQueue ✓.
+- Email + password **sign-up** and **sign-in** via better-auth v1.7.x. Nothing else.
+- No email verification. Sign-up gated by shared secret `AUTH_SIGNUP_KEY` (long string env var).
+- Remove all external provider flows (google, slack, azure, oidc, discord, passkeys, magic-link email).
+- Keep: Outline cancan policies, API keys, OAuth AS (/oauth), MCP, shares — untouched.
+- Keep: `users`/`teams` Sequelize tables as source of truth; better-auth tables prefixed `ba_`.
 
-## Status log (implementation task, appended)
-- [t2] Baselines: tests 348f/4728t green; tsc 0; lint 0; TRUE-baseline stress (after remote-base
-  invalidation): boot 13.5s / RSS 479.4MB / redis 632 ops-min.
-- [t3] Leaves T,E,D,L merged. Driver edits: env.ts (TELEMETRY/ENABLE_UPDATES removed; healthcheck
-  default 120000), .env.sample (ENABLE_UPDATES section removed), package.json (hot-shots dropped,
-  linkedom added). tsc post-merge 0 errors.
-- [t4] Full after-suite green: 348 files | 4734 tests passed (+6 new), 0 failed. Lint exit 0.
-- [t5] Docker pair rebuilt from local bases (remote-base artifact round invalidated honestly).
-  AFTER: boot 14.1s / RSS 399.2MB (−16.7%) / redis 246 ops-min (−61%); latency parity; smoke parity.
-- [t6] G16 partially abandoned with reason (jsdom retained for ProsemirrorHelper.toHTML).
+## Contracts (binding for every leaf)
 
-## Round: CPU fixes implementation — master plan (driver)
+**C1 — Identity mapping.** BA config sets
+`advanced.database.generateId: () => crypto.randomUUID()`.
+`databaseHooks.user.create.before` may rewrite `data.id` to the id of an existing
+Outline `users` row with the same email (claim path for legacy users). If it did
+not rewrite, `databaseHooks.user.create.after` calls
+`server/commands/provisionBetterAuthUser.ts` which creates the matching Outline
+user (same id, role = team.defaultUserRole, admin when creating install's first
+team) and, when no team exists yet, one Team (self-hosted single-workspace
+assumption). No AuthenticationProvider/UserAuthentication rows are ever created.
 
-Pre-flight verified: all event.changes consumers read only scalars (attributes / previous.*);
-textBetween(node) util exists; RateLimiter token-cache pattern reusable; WebsocketsProcessor has
-60 switch cases.
+**C2 — Session resolution.** New module `server/auth/better-auth.ts` exports:
+`auth` (betterAuth instance), `getBetterAuthSession(headers: Headers)` returning
+the BA session+user or null. `server/middlewares/authentication.ts` keeps the
+API-key and OAuth-token branches byte-for-byte; the JWT branch becomes
+dual-read: legacy `getUserForJWT` first (grace window — TestServer and existing
+cookies depend on it), else BA session mapped to the same
+`ctx.state.auth = { user: SequelizeUser, type, token }`. `type` for BA sessions
+is `AuthenticationType.APP`.
 
-### Ownership matrix (disjoint files per leaf)
-- L-A events+worker: Event.ts, DebounceProcessor.ts, worker.ts, middlewares/rateLimiter.ts → CS1,CS3,CS6,CS9
-- L-B auth: utils/jwt.ts (+spec) → CS2
-- L-C websocket: WebsocketsProcessor.ts → CS4
-- L-D tasks+web: DocumentUpdateTextTask.ts, services/web.ts, routes/api/index.ts → CS5,CS7,CS8
-- L-E data: PostgresSearchProvider.ts, ExportDocumentTreeTask.ts, MarkdownAPIImportTask.ts → CD1,CD2,CD3
-- L-F editor-deco: PlaceholderPlugin, nodes/Doc.ts, nodes/ToggleBlock.ts, CodeHighlightingPlugin, CodeWordDecorationsPlugin → CX1,CC4,CC5
-- L-G editor-suggest: SuggestionsMenuPlugin.ts, app/editor/extensions/Suggestion.ts → CX2
-- L-H client-ui: useAutoRefresh, useMousePosition/MouseSafeArea, Contents.tsx, Scrollable.tsx, LocaleTime/useLocaleTime, useCommandBarActions → CC3,CC6,CC7,CC8,CC10,CX3
+**C3 — Routes.** BA handler mounted in `server/services/web.ts` BEFORE
+`mount("/api", api)` as a path guard on `/api/auth/*` calling
+`toNodeHandler(auth)(ctx.req, ctx.res)` (bypasses koa-body). `/auth/*` passport
+router deleted in Leaf 6. Logout endpoint (`api/auth.delete`) calls
+`auth.api.signOut` when the request carried a BA session cookie, else legacy
+rotation. `api/auth.info` stops issuing collaboration tokens (returns `""`),
+keeps response shape otherwise. `api/auth.config` returns
+`providers: []` + `passwordSigninEnabled: true`, keeping other fields.
 
-### Key design decisions (leaves must honor or justify deviation)
-- CS1: strip at enqueue time only (Event.schedule + AfterSave path); whitelist approach — keep
-  attributes/previous scalar entries; replace any single serialized value >8KB with "[stripped]"
-  marker; DB persist path untouched; DebounceProcessor spreads already-stripped payload.
-- CS2: in-process LRU (cap 1000) keyed by sha256(token), TTL 30s; document staleness bound;
-  no cross-process invalidation (accepted trade-off).
-- CS3: derive applicableEvents strictly from existing switch cases; behavior for unmatched
-  events must remain no-op.
-- CS4: module-level Map<documentId, timer+payload> trailing 1000ms in WebsocketsProcessor;
-  latest payload wins; Yjs realtime channel NOT touched.
-- CS5: reuse parsed node via textBetween(node,...); no franc-skip heuristic unless trivially safe.
-- Editor leaves: preserve public plugin APIs; run shared-project specs.
+**C4 — Signup key.** `hooks.before` middleware matching exactly
+`/sign-up/email`: constant-time compare of `body.signupKey` vs
+`env.AUTH_SIGNUP_KEY` (sha256 + timingSafeEqual). Missing/mismatched →
+APIError FORBIDDEN. In development, unset key defaults to `"dev-signup-key"` so
+local flows work. Key stripped from body before proceeding.
+
+**C5 — WebSockets.** Both `server/services/websockets.ts` (socket.io upgrade)
+and `server/collaboration/AuthenticationExtension.ts` (hocuspocus) authenticate
+by parsing the `ba_session` cookie off request headers via
+`getBetterAuthSession` (fallback: legacy JWT during grace). Document ACL checks
+(`can(user,"read"/"update",document)`) unchanged. Client-supplied hocuspocus
+token ignored.
+
+**C6 — Env & config.** New env vars: `AUTH_SIGNUP_KEY` (required outside
+development), optional `BETTER_AUTH_SECRET` (defaults to `SECRET_KEY`),
+optional `BETTER_AUTH_URL` (defaults to `URL`). Database access: dedicated
+`pg.Pool` using the same connection settings Sequelize uses
+(`database.url` / discrete fields — resolved in Leaf 1 from `server/env.ts`).
+
+**C7 — Schema management.** Tables owned by better-auth CLI
+(`npx auth@latest migrate --config server/auth/better-auth.ts`) with model
+names prefixed `ba_` via `modelName` overrides. Tests create schema
+programmatically once in `server/test/setup.ts` via
+`getMigrations(auth.options).runMigrations()`.
+
+**C8 — Grace window.** Legacy per-user JWTs remain valid through the whole
+build (removal is a post-cutover phase NOT part of this build). All existing
+tests must keep passing unmodified except where they test removed provider
+routes.
+
+## Leaves
+
+| Leaf | Deliverable | Mode | Depends |
+|---|---|---|---|
+| impl-A | better-auth installed; `server/auth/better-auth.ts`; Koa mount; ba_ schema tooling; test-schema wiring | parent | — |
+| impl-B | signup-key hook + `provisionBetterAuthUser` command + claim path + unit/integration tests | subagent | A |
+| impl-C | authentication middleware dual-read; logout; auth.info/config | subagent | A,B |
+| impl-D | websocket paths (socket.io + hocuspocus) on C2 helper | subagent | C |
+| impl-E | frontend: Login email+password form (+signup key field), AuthStore adjustments | subagent | C3 contract |
+| impl-F | delete 7 providers' auth routers + registrations, routes/auth, passport deps; prune dead tests | subagent | C,D,E merged |
+| impl-G | integration: full typecheck, lint, targeted suites, all ledgers green | parent | F |
+
+Gates files: `gates/impl-{A..G}.md`. Branch/integration gate = impl-G.
+
+## Risks register
+
+R1 multi-workspace cloud hosting degrades (single-team assumption) — documented,
+not fixed this build.
+R2 desktop `outline://` transfer-token flow loses its exchange endpoint in
+impl-F; desktop falls back to in-app browser session. Accepted.
+R3 BA minor-version churn — pin exact version in package.json.
+R4 test DB must allow DDL (ba_ migrations in setup.ts) — verified in impl-A.

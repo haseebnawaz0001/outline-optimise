@@ -1,25 +1,19 @@
-import { find } from "es-toolkit/compat";
 import { observer } from "mobx-react";
-import { EmailIcon } from "outline-icons";
 import * as React from "react";
-import { Trans, useTranslation } from "react-i18next";
-import { useLocation, Link, Redirect } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import { Redirect, useLocation } from "react-router-dom";
 import styled from "styled-components";
-import { getCookie, setCookie } from "tiny-cookie";
 import { s } from "@shared/styles";
-import { Client, UserPreference } from "@shared/types";
-import { isPWA } from "@shared/utils/browser";
+import { UserPreference } from "@shared/types";
 import { parseDomain } from "@shared/utils/domains";
 import type { Config } from "~/stores/AuthStore";
 import { AvatarSize } from "~/components/Avatar";
 import ButtonLarge from "~/components/ButtonLarge";
 import ChangeLanguage from "~/components/ChangeLanguage";
-import Flex from "~/components/Flex";
 import Heading from "~/components/Heading";
 import OutlineIcon from "~/components/Icons/OutlineIcon";
-import Input from "~/components/Input";
+import InputLarge from "~/components/InputLarge";
 import LoadingIndicator from "~/components/LoadingIndicator";
-import { OneTimePasswordInput } from "~/components/OneTimePasswordInput";
 import PageTitle from "~/components/PageTitle";
 import TeamLogo from "~/components/TeamLogo";
 import Text from "~/components/Text";
@@ -29,23 +23,16 @@ import {
   useLastVisitedPath,
   usePostLoginPath,
 } from "~/hooks/useLastVisitedPath";
-import useQuery from "~/hooks/useQuery";
 import useStores from "~/hooks/useStores";
-import Desktop from "~/utils/Desktop";
 import isCloudHosted from "~/utils/isCloudHosted";
 import { detectLanguage } from "~/utils/language";
 import { homePath } from "~/utils/routeHelpers";
-import AuthenticationProvider from "./components/AuthenticationProvider";
 import { BackButton } from "./components/BackButton";
 import { Background } from "./components/Background";
 import { Centered } from "./components/Centered";
 import { Notices } from "./components/Notices";
-import { PasskeyAuthenticationProvider } from "./components/PasskeyAuthenticationProvider";
-import { SigningIn } from "./components/SigningIn";
 import { SwitchHostButton } from "./components/SwitchHostButton";
-import { navigateToSubdomain } from "./urls";
 import lazyWithRetry from "~/utils/lazyWithRetry";
-import { getRedirectUrl } from "~/utils/urls";
 
 const WorkspaceSetup = lazyWithRetry(
   () => import("./components/WorkspaceSetup")
@@ -56,83 +43,144 @@ type Props = {
   onBack?: () => void;
 };
 
+type Mode = "signin" | "signup";
+
+interface ErrorBody {
+  message?: unknown;
+  error?: unknown;
+}
+
+/**
+ * Extracts a human-readable message from a better-auth error response, which
+ * returns a JSON body containing either a {@link message} or {@link error} key.
+ *
+ * @param response The failed fetch response.
+ * @returns the error message, or an empty string if none could be read.
+ */
+async function readErrorMessage(response: Response): Promise<string> {
+  const body: ErrorBody | null = await response
+    .json()
+    .catch(() => null);
+
+  if (typeof body?.message === "string") {
+    return body.message;
+  }
+  if (typeof body?.error === "string") {
+    return body.error;
+  }
+  return "";
+}
+
+/**
+ * Reads a text field from a submitted HTML form.
+ *
+ * @param entries The form entries.
+ * @param key The name of the field to read.
+ * @returns the field value, or an empty string when absent.
+ */
+function formValue(
+  entries: { [k: string]: FormDataEntryValue },
+  key: string
+): string {
+  const entry = entries[key];
+  return typeof entry === "string" ? entry : "";
+}
+
 function Login({ children, onBack }: Props) {
   const location = useLocation();
-  const query = useQuery();
-  const notice = query.get("notice");
-  const forceOTP = query.get("forceOTP");
-
   const { t } = useTranslation();
   const user = useCurrentUser({ rejectOnEmpty: false });
   const { auth } = useStores();
   const { config } = auth;
+  const [mode, setMode] = React.useState<Mode>("signin");
   const [error, setError] = React.useState(null);
-  const [emailLinkSentTo, setEmailLinkSentTo] = React.useState("");
-  const isCreate = location.pathname === "/create";
+  const [formError, setFormError] = React.useState<string | undefined>(
+    undefined
+  );
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
   const rememberLastPath = !!user?.getPreference(
     UserPreference.RememberLastPath
   );
   const [lastVisitedPath] = useLastVisitedPath();
   const [spendPostLoginPath] = usePostLoginPath();
-  const hasRedirectedToOidc = React.useRef(false);
-
-  const shouldRedirectToOidc =
-    !auth.authenticated &&
-    !auth.isFetching &&
-    config?.providers.length === 1 &&
-    config.providers[0].id === "oidc" &&
-    !env.OIDC_DISABLE_REDIRECT &&
-    !query.get("notice") &&
-    !query.get("logout");
-
-  React.useEffect(() => {
-    if (shouldRedirectToOidc && !hasRedirectedToOidc.current && config) {
-      hasRedirectedToOidc.current = true;
-      window.location.href = getRedirectUrl(config.providers[0].authUrl);
-    }
-  }, [shouldRedirectToOidc, config]);
-
-  const handleReset = React.useCallback(() => {
-    setEmailLinkSentTo("");
-  }, []);
-  const handleEmailSuccess = React.useCallback((email) => {
-    setEmailLinkSentTo(email);
-  }, []);
-
-  const handleGoSubdomain = React.useCallback(async (event) => {
-    event.preventDefault();
-    const data = Object.fromEntries(new FormData(event.target));
-    await navigateToSubdomain(data.subdomain as string);
-  }, []);
 
   React.useEffect(() => {
     auth.fetchConfig().catch(setError);
   }, [auth]);
 
   React.useEffect(() => {
-    const entries = Object.fromEntries(query.entries());
-    const existing = getCookie("signupQueryParams");
-
-    // We don't want to set this cookie if we're viewing an error notice via
-    // query string(notice =), if there are no query params, or it's already set
-    if (Object.keys(entries).length && !query.get("notice") && !existing) {
-      setCookie("signupQueryParams", JSON.stringify(entries));
+    if (config?.passwordSigninEnabled === false) {
+      setMode("signup");
     }
-  }, [query]);
+  }, [config]);
 
-  // A passkey login initiated from the desktop app must complete the login
-  // ceremony even when this browser already has a session.
-  const isPasskeyLogin = query.get("method") === "passkey";
+  const handleShowSignIn = () => {
+    setMode("signin");
+    setFormError(undefined);
+  };
 
-  // When the desktop app forces a passkey login it opens this page in the
-  // system browser, where the ceremony is triggered automatically. Show the
-  // "Signing in" screen rather than the login buttons.
-  const isDesktopPasskeyRedirect =
-    isPasskeyLogin &&
-    query.get("client") === Client.Desktop &&
-    !Desktop.isElectron();
+  const handleShowSignUp = () => {
+    setMode("signup");
+    setFormError(undefined);
+  };
 
-  if (auth.authenticated && !isPasskeyLogin) {
+  const handleSubmitAuth = async (
+    path: string,
+    data: Record<string, string>
+  ) => {
+    if (isSubmitting) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    setFormError(undefined);
+
+    try {
+      const response = await window.fetch(path, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(data),
+      });
+
+      if (!response.ok) {
+        const message = await readErrorMessage(response);
+        setFormError(message || t("Sorry, an unknown error occurred."));
+        return;
+      }
+
+      await auth.fetchAuth();
+    } catch (_err) {
+      setFormError(t("Sorry, an unknown error occurred."));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSignIn = (event: React.SyntheticEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const entries = Object.fromEntries(new FormData(event.currentTarget));
+    void handleSubmitAuth("/api/auth/sign-in/email", {
+      email: formValue(entries, "email"),
+      password: formValue(entries, "password"),
+    });
+  };
+
+  const handleSignUp = (event: React.SyntheticEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const entries = Object.fromEntries(new FormData(event.currentTarget));
+    void handleSubmitAuth("/api/auth/sign-up/email", {
+      name: formValue(entries, "name"),
+      email: formValue(entries, "email"),
+      password: formValue(entries, "password"),
+      signupKey: formValue(entries, "signupKey"),
+    });
+  };
+
+  if (auth.authenticated) {
     const postLoginPath = spendPostLoginPath();
     if (postLoginPath) {
       return <Redirect to={postLoginPath} />;
@@ -179,22 +227,6 @@ function Login({ children, onBack }: Props) {
     return <LoadingIndicator />;
   }
 
-  // The passkey ceremony is triggered automatically here, so render the
-  // "Signing in" screen in place of the login buttons. The passkey provider is
-  // still mounted (hidden) to drive the ceremony and form submission, revealing
-  // a retry button if the ceremony fails.
-  if (isDesktopPasskeyRedirect) {
-    return (
-      <Background>
-        <ChangeLanguage locale={detectLanguage()} />
-        <Centered gap={12}>
-          <SigningIn />
-          <PasskeyAuthenticationProvider />
-        </Centered>
-      </Background>
-    );
-  }
-
   const isCustomDomain = parseDomain(window.location.origin).custom;
 
   // Unmapped custom domain
@@ -216,48 +248,7 @@ function Login({ children, onBack }: Props) {
     );
   }
 
-  if (Desktop.isElectron() && notice === "domain-required") {
-    return (
-      <Background>
-        <BackButton onBack={onBack} config={config} />
-        <ChangeLanguage locale={detectLanguage()} />
-
-        <Centered as="form" onSubmit={handleGoSubdomain}>
-          <Heading centered>{t("Choose workspace")}</Heading>
-          <Note>
-            {t(
-              "This login method requires choosing your workspace to continue"
-            )}
-            …
-          </Note>
-          <Flex>
-            <Input
-              name="subdomain"
-              style={{ textAlign: "right" }}
-              placeholder={t("subdomain")}
-              pattern="^[a-z\d-]+$"
-              required
-            >
-              <Domain>.getoutline.com</Domain>
-            </Input>
-          </Flex>
-          <ButtonLarge type="submit" fullwidth>
-            {t("Continue")}
-          </ButtonLarge>
-        </Centered>
-      </Background>
-    );
-  }
-
-  const firstRun =
-    config.providers.length === 0 && !isCloudHosted && !config.name;
-  const hasMultipleProviders = config.providers.length > 1;
-  const defaultProvider = find(
-    config.providers,
-    (provider) => provider.id === auth.lastSignedIn && !isCreate
-  );
-  const clientType = Desktop.isElectron() ? Client.Desktop : Client.Web;
-  const preferOTP = isPWA || !!forceOTP;
+  const firstRun = !isCloudHosted && !config.name;
 
   if (firstRun) {
     return (
@@ -267,177 +258,128 @@ function Login({ children, onBack }: Props) {
     );
   }
 
-  if (emailLinkSentTo) {
-    return (
-      <Background>
-        <BackButton onBack={onBack} config={config} />
-        <Centered>
-          <PageTitle title={t("Check your email")} />
-          <CheckEmailIcon size={38} />
-          <Heading centered>{t("Check your email")}</Heading>
-          {preferOTP ? (
-            <>
-              <Note>
-                <Trans
-                  defaults="Enter the sign-in code sent to the email <em>{{ emailLinkSentTo }}</em>"
-                  values={{ emailLinkSentTo }}
-                  components={{ em: <em /> }}
-                />
-                .
-              </Note>
-              <Form
-                method="POST"
-                action="/auth/email.callback"
-                style={{ width: "100%" }}
-              >
-                <input type="hidden" name="email" value={emailLinkSentTo} />
-                <input type="hidden" name="client" value={clientType} />
-                <input type="hidden" name="follow" value="true" />
-                <OneTimePasswordInput name="code" />
-                <br />
-                <ButtonLarge type="submit" fullwidth>
-                  {t("Continue")}
-                </ButtonLarge>
-              </Form>
-            </>
-          ) : (
-            <>
-              <Note>
-                <Trans
-                  defaults="A magic sign-in link has been sent to the email <em>{{ emailLinkSentTo }}</em> if an account exists."
-                  values={{ emailLinkSentTo }}
-                  components={{ em: <em /> }}
-                />
-              </Note>
-              <br />
-            </>
-          )}
-          <ButtonLarge onClick={handleReset} fullwidth neutral>
-            {t("Back to login")}
-          </ButtonLarge>
-        </Centered>
-      </Background>
-    );
-  }
-
-  // If there is only one provider and it's OIDC, the redirect is performed
-  // from the effect above – render a loading indicator while we wait.
-  if (shouldRedirectToOidc) {
-    return <LoadingIndicator />;
-  }
-
   return (
     <Background>
       <BackButton onBack={onBack} config={config} />
       <ChangeLanguage locale={detectLanguage()} />
-      <SwitchHostButton />
 
       <Centered gap={12}>
         <PageTitle
           title={config.name ? `${config.name} – ${t("Login")}` : t("Login")}
         />
         <Logo>
-          {config.logo && !isCreate ? (
+          {config.logo ? (
             <TeamLogo size={AvatarSize.XXLarge} src={config.logo} />
           ) : (
             <OutlineIcon size={AvatarSize.XXLarge} />
           )}
         </Logo>
-        {isCreate ? (
-          <>
-            <StyledHeading as="h2" centered>
-              {t("Create a workspace")}
-            </StyledHeading>
-            <Content>
-              {t(
-                "Get started by choosing a sign-in method for your new workspace below…"
-              )}
-            </Content>
-          </>
-        ) : (
-          <>
-            <StyledHeading as="h2" centered>
-              {t("Login to {{ authProviderName }}", {
-                authProviderName: config.name || env.APP_NAME,
-              })}
-            </StyledHeading>
-            {children?.(config)}
-          </>
-        )}
+        <StyledHeading as="h2" centered>
+          {t("Login to {{ authProviderName }}", {
+            authProviderName: config.name || env.APP_NAME,
+          })}
+        </StyledHeading>
+        {children?.(config)}
         <Notices />
-        {defaultProvider && (
-          <React.Fragment key={defaultProvider.id}>
-            <AuthenticationProvider
-              isCreate={isCreate}
-              onEmailSuccess={handleEmailSuccess}
-              preferOTP={preferOTP}
-              {...defaultProvider}
-            />
-            {hasMultipleProviders && (
-              <>
-                <Note>
-                  {t("You signed in with {{ authProviderName }} last time.", {
-                    authProviderName: defaultProvider.name,
-                  })}
-                </Note>
-                <Or data-text={t("Or")} />
-              </>
-            )}
-          </React.Fragment>
-        )}
-        {config.providers.map((provider) => {
-          if (defaultProvider && provider.id === defaultProvider.id) {
-            return null;
-          }
 
-          return (
-            <AuthenticationProvider
-              key={provider.id}
-              isCreate={isCreate}
-              onEmailSuccess={handleEmailSuccess}
-              preferOTP={preferOTP}
-              neutral={defaultProvider && hasMultipleProviders}
-              {...provider}
+        <Tabs>
+          <TabButton
+            type="button"
+            $active={mode === "signin"}
+            onClick={handleShowSignIn}
+          >
+            {t("Sign in")}
+          </TabButton>
+          <TabButton
+            type="button"
+            $active={mode === "signup"}
+            onClick={handleShowSignUp}
+          >
+            {t("Sign up")}
+          </TabButton>
+        </Tabs>
+
+        {mode === "signin" ? (
+          <Form onSubmit={handleSignIn}>
+            <Field
+              type="email"
+              name="email"
+              placeholder={t("Email")}
+              autoComplete="email"
+              autoFocus
+              disabled={isSubmitting}
+              required
+              margin="0 0 12px"
             />
-          );
-        })}
-        {isCreate && (
-          <Note>
-            <Trans>
-              Already have an account? Go to <Link to="/">login</Link>.
-            </Trans>
-          </Note>
+            <Field
+              type="password"
+              name="password"
+              placeholder={t("Password")}
+              autoComplete="current-password"
+              disabled={isSubmitting}
+              required
+              margin="0 0 12px"
+            />
+            <ButtonLarge type="submit" disabled={isSubmitting} fullwidth>
+              {t("Sign in")}
+            </ButtonLarge>
+          </Form>
+        ) : (
+          <Form onSubmit={handleSignUp}>
+            <Field
+              type="text"
+              name="name"
+              placeholder={t("Name")}
+              autoComplete="name"
+              autoFocus
+              disabled={isSubmitting}
+              required
+              margin="0 0 12px"
+            />
+            <Field
+              type="email"
+              name="email"
+              placeholder={t("Email")}
+              autoComplete="email"
+              disabled={isSubmitting}
+              required
+              margin="0 0 12px"
+            />
+            <Field
+              type="password"
+              name="password"
+              placeholder={t("Password")}
+              autoComplete="new-password"
+              disabled={isSubmitting}
+              required
+              margin="0 0 12px"
+            />
+            <Field
+              type="text"
+              name="signupKey"
+              placeholder={t("Signup key")}
+              autoComplete="off"
+              disabled={isSubmitting}
+              required
+              margin="0 0 12px"
+            />
+            <ButtonLarge type="submit" disabled={isSubmitting} fullwidth>
+              {t("Create account")}
+            </ButtonLarge>
+          </Form>
         )}
+        {formError && <FormError>{formError}</FormError>}
       </Centered>
     </Background>
   );
 }
 
-const Form = styled.form`
-  margin: 1em 0;
-`;
-
 const StyledHeading = styled(Heading)`
   margin: 0;
 `;
 
-const Domain = styled.div`
-  color: ${s("textSecondary")};
-  padding: 0 8px 0 0;
-`;
-
-const CheckEmailIcon = styled(EmailIcon)`
-  margin-bottom: -1.5em;
-`;
-
 const Logo = styled.div`
   margin-bottom: -4px;
-`;
-
-const Content = styled(Text)`
-  color: ${s("textSecondary")};
-  text-align: center;
-  margin-top: -8px;
 `;
 
 const Note = styled(Text)`
@@ -445,34 +387,49 @@ const Note = styled(Text)`
   text-align: center;
   font-size: 14px;
   margin-top: 8px;
+`;
 
-  em {
-    font-style: normal;
-    font-weight: 500;
+const Tabs = styled.div`
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+`;
+
+const TabButton = styled.button<{ $active?: boolean }>`
+  appearance: none;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  padding: 6px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  color: ${(props) =>
+    props.$active ? s("text")(props) : s("textTertiary")(props)};
+
+  &:hover,
+  &:focus-visible {
+    color: ${s("text")};
   }
 `;
 
-const Or = styled.hr`
-  margin: 1em 0;
-  position: relative;
+const Form = styled.form`
   width: 100%;
-  border: 0;
-  border-top: 1px solid ${s("divider")};
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+`;
 
-  &:after {
-    content: attr(data-text);
-    display: block;
-    position: absolute;
-    left: 50%;
-    transform: translate3d(-50%, -50%, 0);
-    text-transform: uppercase;
-    font-size: 11px;
-    font-weight: 500;
-    color: ${s("textTertiary")};
-    background: ${s("background")};
-    border-radius: 2px;
-    padding: 0 4px;
-  }
+const Field = styled(InputLarge)`
+  width: 100%;
+  margin-right: 0;
+`;
+
+const FormError = styled(Text)`
+  color: ${s("danger")};
+  text-align: center;
+  font-size: 14px;
+  margin-top: 12px;
 `;
 
 export default observer(Login);

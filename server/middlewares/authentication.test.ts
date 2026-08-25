@@ -1,7 +1,10 @@
+import crypto from "node:crypto";
 import type { DefaultState } from "koa";
 import { errToString } from "@shared/utils/error";
 import { randomString } from "@shared/random";
 import { Scope } from "@shared/types";
+import env from "@server/env";
+import { auth as betterAuth } from "@server/auth/better-auth";
 import {
   buildUser,
   buildTeam,
@@ -9,6 +12,8 @@ import {
   buildApiKey,
   buildOAuthAuthentication,
 } from "@server/test/factories";
+import { User } from "@server/models";
+import { sequelize } from "@server/storage/database";
 import { AuthenticationType } from "@server/types";
 import auth from "./authentication";
 
@@ -440,5 +445,118 @@ describe("Authentication middleware", () => {
     }
 
     expect(errToString(error)).toEqual("Invalid token");
+  });
+
+  describe("with better-auth session cookie", () => {
+    const TestSignupKey = "impl-c-test-signup-key";
+    const TestPassword = "super-secret-password";
+    const createdEmails = new Set<string>();
+    let originalSignupKey: string | undefined;
+
+    beforeEach(() => {
+      originalSignupKey = env.AUTH_SIGNUP_KEY;
+      env.AUTH_SIGNUP_KEY = TestSignupKey;
+    });
+
+    afterEach(async () => {
+      const emails = [...createdEmails];
+
+      if (emails.length > 0) {
+        await sequelize.query(
+          'DELETE FROM ba_session WHERE "userId" IN (SELECT id FROM ba_user WHERE email IN (:emails))',
+          { replacements: { emails } }
+        );
+        await sequelize.query(
+          'DELETE FROM ba_account WHERE "userId" IN (SELECT id FROM ba_user WHERE email IN (:emails))',
+          { replacements: { emails } }
+        );
+        await sequelize.query("DELETE FROM ba_user WHERE email IN (:emails)", {
+          replacements: { emails },
+        });
+        await User.destroy({ where: { email: emails }, force: true });
+      }
+
+      createdEmails.clear();
+      env.AUTH_SIGNUP_KEY = originalSignupKey;
+    });
+
+    it("should authenticate a request carrying only a valid better-auth session", async () => {
+      const email = `${crypto.randomUUID()}@example.com`;
+      createdEmails.add(email);
+
+      const response = await betterAuth.api.signUpEmail({
+        body: Object.assign(
+          { email, password: TestPassword, name: "BA Session" },
+          { signupKey: TestSignupKey }
+        ),
+        asResponse: true,
+      });
+      expect(response.status).toEqual(200);
+
+      const sessionCookie = response.headers
+        .getSetCookie()
+        .find((cookie) => cookie.startsWith("better-auth.session_token="));
+      expect(sessionCookie).toBeTruthy();
+
+      const cookieValue = (sessionCookie ?? "").split(";")[0];
+      const state = {} as DefaultState;
+      const authMiddleware = auth();
+      await authMiddleware(
+        {
+          headers: { cookie: cookieValue },
+          request: {
+            // @ts-expect-error mock request
+            get: vi.fn((name: string) =>
+              name.toLowerCase() === "cookie" ? cookieValue : null
+            ),
+          },
+          // @ts-expect-error mock cookies
+          cookies: {
+            get: vi.fn(() => undefined),
+          },
+          state,
+          cache: {},
+        },
+        vi.fn()
+      );
+
+      const user = await User.findOne({
+        where: { email },
+        rejectOnEmpty: true,
+      });
+      expect(state.auth.type).toEqual(AuthenticationType.APP);
+      expect(state.auth.user.id).toEqual(user.id);
+      const sessionTokenValue = (sessionCookie ?? "")
+        .split(";")[0]
+        .replace(/^better-auth\.session_token=/, "");
+      expect(state.auth.token).toEqual(sessionTokenValue.split(".")[0]);
+    });
+
+    it("should not authenticate when the better-auth session is missing or expired", async () => {
+      const state = {} as DefaultState;
+      const authMiddleware = auth();
+      const cookieValue = "better-auth.session_token=does-not-exist";
+
+      await expect(
+        authMiddleware(
+          {
+            headers: { cookie: cookieValue },
+            request: {
+              // @ts-expect-error mock request
+              get: vi.fn((name: string) =>
+                name.toLowerCase() === "cookie" ? cookieValue : null
+              ),
+            },
+            // @ts-expect-error mock cookies
+            cookies: {
+              get: vi.fn(() => undefined),
+            },
+            state,
+            cache: {},
+          },
+          vi.fn()
+        )
+      ).rejects.toThrow("Authentication required");
+    });
   });
 });

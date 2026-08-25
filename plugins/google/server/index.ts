@@ -1,16 +1,9 @@
-import { PluginManager, Hook } from "@server/utils/PluginManager";
 import config from "../plugin.json";
-import router from "./auth/google";
-import env from "./env";
 
-const enabled = !!env.GOOGLE_CLIENT_ID && !!env.GOOGLE_CLIENT_SECRET;
-
-if (enabled) {
-  PluginManager.add([
-    {
-      ...config,
-      type: Hook.AuthProvider,
-      value: { router, id: config.id },
-    },
-  ]);
-}
+/**
+ * The Google authentication provider was removed in favor of better-auth.
+ * This entrypoint registers no hooks; it exists so the PluginManager glob
+ * continues to resolve the plugin. The OAuth client in `./google` is
+ * retained only for validating tokens of pre-existing user authentications.
+ */
+export const plugin = config;

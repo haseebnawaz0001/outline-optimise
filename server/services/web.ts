@@ -11,17 +11,35 @@ import enforceHttps, {
   xForwardedProtoResolver,
 } from "koa-sslify";
 import env from "@server/env";
+import { authHandler } from "@server/auth/better-auth";
 import Logger from "@server/logging/Logger";
 import csp from "@server/middlewares/csp";
 import { attachCSRFToken } from "@server/middlewares/csrf";
 import { initI18n } from "@server/utils/i18n";
 import routes from "../routes";
 import api from "../routes/api";
-import auth from "../routes/auth";
 import mcp from "../routes/mcp";
 import oauth from "../routes/oauth";
 import type { UserAgentContext } from "koa-useragent";
 import userAgent from "koa-useragent";
+
+/**
+ * Handles requests to the better-auth mount point (`/api/auth/*`) by handing
+ * the raw Node request/response to the better-auth handler. Must run before
+ * any body-parsing middleware.
+ */
+function betterAuthHandler() {
+  return async (ctx: { path: string; req: unknown; res: unknown }, next: () => Promise<void>) => {
+    if (!ctx.path.startsWith("/api/auth/") && ctx.path !== "/api/auth") {
+      await next();
+      return;
+    }
+    await authHandler(
+      ctx.req as Parameters<typeof authHandler>[0],
+      ctx.res as Parameters<typeof authHandler>[1]
+    );
+  };
+}
 
 export default function init(app: Koa = new Koa(), server?: Server) {
   void initI18n();
@@ -78,6 +96,7 @@ export default function init(app: Koa = new Koa(), server?: Server) {
     })
   );
 
+  app.use(betterAuthHandler());
   app.use(mount("/api", api));
   app.use(mount("/mcp", mcp));
 
@@ -100,7 +119,6 @@ export default function init(app: Koa = new Koa(), server?: Server) {
     })
   );
 
-  app.use(mount("/auth", auth));
   app.use(mount("/oauth", oauth));
   app.use(mount(routes));
 

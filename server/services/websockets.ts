@@ -6,13 +6,14 @@ import type Koa from "koa";
 import IO from "socket.io";
 import { createAdapter } from "socket.io-redis";
 import { errToId, errToString, toError } from "@shared/utils/error";
+import { getBetterAuthSession } from "@server/auth/better-auth";
 import env from "@server/env";
 import { AuthenticationError } from "@server/errors";
 import Logger from "@server/logging/Logger";
 import Metrics from "@server/logging/Metrics";
 import * as Tracing from "@server/logging/tracer";
 import { traceFunction } from "@server/logging/tracing";
-import type { User } from "@server/models";
+import { User } from "@server/models";
 import { rejectUpgrade } from "@server/onupgrade";
 import Redis from "@server/storage/redis";
 import ShutdownHelper, { ShutdownOrder } from "@server/utils/ShutdownHelper";
@@ -217,10 +218,47 @@ async function authenticated(
 }
 
 /**
- * Authenticate the socket with the given token, returning the user model and
- * attaching lightweight auth identifiers for the lifetime of the connection.
+ * Builds a Fetch API Headers object from the headers of a node request, so
+ * that session helpers expecting web-style headers work for upgrade requests.
+ *
+ * @param req The node request whose raw headers should be copied.
+ * @returns A Headers object containing every header of the request.
+ */
+function headersFromRequest(req: IncomingMessage): Headers {
+  const headers = new globalThis.Headers();
+
+  for (let i = 0; i < req.rawHeaders.length; i += 2) {
+    headers.append(req.rawHeaders[i], req.rawHeaders[i + 1]);
+  }
+
+  return headers;
+}
+
+/**
+ * Authenticate the socket with a better-auth session resolved from the
+ * upgrade request headers. During the grace window a legacy access token
+ * cookie is still accepted when no better-auth session resolves. Attaches
+ * lightweight auth identifiers for the lifetime of the connection.
+ *
+ * @param socket The socket that is being authenticated.
+ * @returns The user model owning the connection.
+ * @throws {AuthenticationError} If no valid credentials are presented.
  */
 async function authenticate(socket: SocketWithAuth): Promise<User> {
+  const session = await getBetterAuthSession(
+    headersFromRequest(socket.request)
+  );
+
+  if (session?.user.id) {
+    const user = await User.findByPk(session.user.id);
+
+    if (user) {
+      socket.client.auth = { userId: user.id, teamId: user.teamId };
+      return user;
+    }
+  }
+
+  // Grace window: legacy per-user JWTs remain valid until cutover.
   const cookies = socket.request.headers.cookie
     ? cookie.parse(socket.request.headers.cookie)
     : {};

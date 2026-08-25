@@ -49,6 +49,22 @@ vi.mock("@aws-sdk/s3-request-presigner", () => ({
 // would be hoisted ahead of it.
 await import("@server/storage/database");
 
+// Ensure the better-auth schema (ba_* tables) exists in the test database
+// before any test exercises authentication. Idempotent per run.
+try {
+  const { auth } = await import("@server/auth/better-auth");
+  const { getMigrations } = await import("better-auth/db/migration");
+  const { runMigrations } = await getMigrations(auth.options);
+  await runMigrations();
+} catch (error) {
+  // Non-fatal: suites that never touch better-auth endpoints still run.
+  const mod = await import("@server/logging/Logger");
+  const Logger = mod.default;
+  Logger.warn(
+    `better-auth schema migration skipped: ${error instanceof Error ? error.message : String(error)}`
+  );
+}
+
 // Eagerly load plugin server entry points so that PluginManager.getHooks()
 // returns the registered plugins. Vitest does not support require() of TS
 // files with bare imports (e.g. `@server/...`), so we use Vite's

@@ -6,14 +6,16 @@ import type {
   onConfigurePayload,
   onDestroyPayload,
 } from "@hocuspocus/server";
+import type { IncomingHttpHeaders } from "node:http";
 import { uniq } from "es-toolkit";
 import { AuthorizationChanged } from "@shared/collaboration/CloseEvents";
 import { toError } from "@shared/utils/error";
+import { getBetterAuthSession } from "@server/auth/better-auth";
 import Logger from "@server/logging/Logger";
 import { trace } from "@server/logging/tracing";
 import Document from "@server/models/Document";
 import GroupUser from "@server/models/GroupUser";
-import type User from "@server/models/User";
+import User from "@server/models/User";
 import { can } from "@server/policies";
 import RedisAdapter from "@server/storage/redis";
 import { getUserForJWT } from "@server/utils/jwt";
@@ -23,6 +25,27 @@ import { AuthenticationError, InternalError } from "../errors";
  * Redis channel that carries access changes to collaboration servers.
  */
 const CHANNEL = "collaboration:authorization";
+
+/**
+ * Builds a Fetch API Headers object from the headers of a WebSocket upgrade
+ * request, so that session helpers expecting web-style headers work here.
+ *
+ * @param record The raw headers of the upgrade request.
+ * @returns A Headers object containing every header of the request.
+ */
+function headersFromRequest(record: IncomingHttpHeaders): Headers {
+  const headers = new globalThis.Headers();
+
+  for (const [key, value] of Object.entries(record)) {
+    if (Array.isArray(value)) {
+      value.forEach((item) => headers.append(key, item));
+    } else if (value !== undefined) {
+      headers.append(key, value);
+    }
+  }
+
+  return headers;
+}
 
 /**
  * Describes which connections are affected by an access change. A connection is
@@ -72,19 +95,39 @@ export default class AuthenticationExtension implements Extension {
     Logger.debug("multiplayer", "Published access change", scope);
   }
 
+  /**
+   * Authenticates a connection to a document. The better-auth session cookie
+   * on the upgrade request is the preferred credential; during the grace
+   * window a client-supplied legacy collaboration token is still accepted
+   * when no session resolves.
+   *
+   * @param payload The authentication payload containing the connection,
+   * token, and document name.
+   * @returns The authenticated user for the connection.
+   * @throws {AuthenticationError} If no valid credentials are presented or
+   * the user may not read the document.
+   */
   async onAuthenticate({
     connection,
     token,
     documentName,
+    requestHeaders,
   }: onAuthenticatePayload) {
     // allows for different entity types to use this multiplayer provider later
     const [, documentId] = documentName.split(".");
 
-    if (!token) {
-      throw AuthenticationError("Authentication required");
+    let user = await this.authenticate(requestHeaders);
+
+    if (!user) {
+      // Grace window: legacy per-user collaboration JWTs remain valid until
+      // cutover.
+      if (!token) {
+        throw AuthenticationError("Authentication required");
+      }
+
+      user = (await getUserForJWT(token, ["session", "collaboration"])).user;
     }
 
-    const { user } = await getUserForJWT(token, ["session", "collaboration"]);
     const document = await Document.findByPk(documentId, {
       userId: user.id,
     });
@@ -218,6 +261,28 @@ export default class AuthenticationExtension implements Extension {
   private instance?: Hocuspocus;
 
   private subscribed = false;
+
+  /**
+   * Resolves the user owning a connection from the better-auth session
+   * carried by the headers of its WebSocket upgrade request.
+   *
+   * @param requestHeaders The headers of the upgrade request.
+   * @returns The user when a valid session exists and maps to an Outline
+   * user, otherwise null.
+   */
+  private async authenticate(
+    requestHeaders: IncomingHttpHeaders
+  ): Promise<User | null> {
+    const session = await getBetterAuthSession(
+      headersFromRequest(requestHeaders)
+    );
+
+    if (!session?.user.id) {
+      return null;
+    }
+
+    return User.findByPk(session.user.id);
+  }
 
   private handleMessage = async (channel: string, message: string) => {
     if (channel !== CHANNEL) {

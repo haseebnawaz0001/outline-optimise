@@ -2,24 +2,26 @@ import { subHours, subMinutes } from "date-fns";
 import Router from "koa-router";
 import { uniqBy } from "es-toolkit/compat";
 import { TeamPreference } from "@shared/types";
+import { toError } from "@shared/utils/error";
 import { parseDomain } from "@shared/utils/domains";
 import env from "@server/env";
-import auth from "@server/middlewares/authentication";
+import { auth as betterAuth } from "@server/auth/better-auth";
+import auth, {
+  requestHeadersFromContext,
+} from "@server/middlewares/authentication";
+import Logger from "@server/logging/Logger";
 import { transaction } from "@server/middlewares/transaction";
 import { Event, Team } from "@server/models";
-import AuthenticationHelper from "@server/models/helpers/AuthenticationHelper";
 import {
   presentUser,
   presentTeam,
   presentPolicies,
-  presentProviderConfig,
   presentAvailableTeam,
   presentGroup,
   presentGroupUser,
 } from "@server/presenters";
 import ValidateSSOAccessTask from "@server/queues/tasks/ValidateSSOAccessTask";
 import type { APIContext } from "@server/types";
-import { AuthenticationType } from "@server/types";
 import { getSessionsInCookie } from "@server/utils/authentication";
 import RateLimiter from "@server/utils/RateLimiter";
 import type * as T from "./schema";
@@ -43,9 +45,8 @@ router.post("auth.config", async (ctx: APIContext<T.AuthConfigReq>) => {
           logo: team.getPreference(TeamPreference.PublicBranding)
             ? team.avatarUrl
             : undefined,
-          providers: (await AuthenticationHelper.providersForTeam(team)).map(
-            presentProviderConfig
-          ),
+          providers: [],
+          passwordSigninEnabled: true,
         },
       };
       return;
@@ -70,9 +71,8 @@ router.post("auth.config", async (ctx: APIContext<T.AuthConfigReq>) => {
             ? team.avatarUrl
             : undefined,
           hostname: ctx.request.hostname,
-          providers: (await AuthenticationHelper.providersForTeam(team)).map(
-            presentProviderConfig
-          ),
+          providers: [],
+          passwordSigninEnabled: true,
         },
       };
       return;
@@ -97,9 +97,8 @@ router.post("auth.config", async (ctx: APIContext<T.AuthConfigReq>) => {
             ? team.avatarUrl
             : undefined,
           hostname: ctx.request.hostname,
-          providers: (await AuthenticationHelper.providersForTeam(team)).map(
-            presentProviderConfig
-          ),
+          providers: [],
+          passwordSigninEnabled: true,
         },
       };
       return;
@@ -109,9 +108,8 @@ router.post("auth.config", async (ctx: APIContext<T.AuthConfigReq>) => {
   // Otherwise, we're requesting from the standard root signin page
   ctx.body = {
     data: {
-      providers: (await AuthenticationHelper.providersForTeam()).map(
-        presentProviderConfig
-      ),
+      providers: [],
+      passwordSigninEnabled: true,
     },
   };
 });
@@ -120,7 +118,7 @@ router.post("auth.config", async (ctx: APIContext<T.AuthConfigReq>) => {
 const NON_SSO_SERVICES = ["email", "passkeys"];
 
 router.post("auth.info", auth(), async (ctx: APIContext<T.AuthInfoReq>) => {
-  const { user, service, type } = ctx.state.auth;
+  const { user, service } = ctx.state.auth;
   const sessions = getSessionsInCookie(ctx);
   const signedInTeamIds = Object.keys(sessions);
 
@@ -169,12 +167,9 @@ router.post("auth.info", auth(), async (ctx: APIContext<T.AuthInfoReq>) => {
       team: presentTeam(team),
       groups: await Promise.all(groups.map(presentGroup)),
       groupUsers: groups.map((group) => presentGroupUser(group.groupUsers[0])),
-      // The collaboration token is only for the client and should not be issued
-      // to API or OAuth consumers
-      collaborationToken:
-        type === AuthenticationType.APP
-          ? user.getCollaborationToken()
-          : undefined,
+      // Collaboration tokens are no longer issued; the empty value is kept so
+      // existing clients continue to parse the payload.
+      collaborationToken: "",
       availableTeams: uniqBy([...signedInTeams, ...availableTeams], "id").map(
         (availableTeam) =>
           presentAvailableTeam(
@@ -195,6 +190,22 @@ router.post(
   async (ctx: APIContext<T.AuthDeleteReq>) => {
     const { auth, transaction } = ctx.state;
     const { user, token } = auth;
+
+    // Sign out of any better-auth session the request carried, best-effort.
+    // The legacy cookie rotation below always continues to run.
+    const cookieHeader = ctx.get("cookie") ?? "";
+    if (
+      cookieHeader.includes("better-auth") ||
+      cookieHeader.includes("ba_session")
+    ) {
+      try {
+        await betterAuth.api.signOut({
+          headers: requestHeadersFromContext(ctx),
+        });
+      } catch (error) {
+        Logger.error("Failed to sign out better-auth session", toError(error));
+      }
+    }
 
     await user.rotateJwtSecret({ transaction });
     await Event.createFromContext(ctx, {

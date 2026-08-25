@@ -1,0 +1,18 @@
+# Gates: impl-C session middleware + logout + info/config
+
+Scope: authentication middleware resolves BA sessions to the same ctx.state.auth shape; logout and auth.info/auth.config behave per contract C2/C3; legacy JWT grace intact.
+
+- [x] G1: API-key and OAuth branches untouched (diff vs pre-change shows only JWT branch + imports changed).
+  EVIDENCE: `git diff server/middlewares/authentication.ts` reviewed - OAuth branch (match / findByAccessToken / expiry / canAccess / user lookup) and API-key branch bodies are byte-for-byte unchanged; diff touches only imports, three new session-path helpers (`requestHeadersFromContext`, `hasBetterAuthCredentials`, `getUserForBetterAuthSession`), the no-token preamble (cookie-only BA requests now resolve instead of throwing), and the JWT else-branch dual-read. Shared suspension / role / type gates and `updateActiveAt` untouched.
+- [x] G2: Dual-read: legacy getUserForJWT still attempted before BA session lookup.
+  CHECK: grep -n "getUserForJWT\|getBetterAuthSession" server/middlewares/authentication.ts
+  EXPECT: /getUserForJWT[\s\S]*getBetterAuthSession|getBetterAuthSession/
+  EVIDENCE: JWT branch wraps getUserForJWT in try/catch; catch falls back to getBetterAuthSession (via getUserForBetterAuthSession) only when hasBetterAuthCredentials(ctx); when BA returns null the original legacy error is rethrown verbatim ("Invalid token" etc.). Cookie-only requests resolve directly through getBetterAuthSession. Note: BA resolution reads cookies from request headers only; a Bearer credential alone cannot satisfy auth.api.getSession (no bearer plugin enabled), consistent with C2 browser-cookie grace design.
+- [x] G3: Existing middleware tests pass unchanged.
+  CHECK: yarn test server/middlewares/authentication.test.ts
+  EXPECT: /passed/
+  EVIDENCE: `corepack yarn test server/middlewares/authentication.test.ts` -> "Test Files  1 passed (1)" / "Tests  19 passed (19)". The 17 pre-existing tests are unmodified and pass; 2 new tests cover (a) cookie-only valid BA session resolving type APP with users.id === ba_user.id (signUpEmail with env.AUTH_SIGNUP_KEY stubbed, signed better-auth.session_token taken from asResponse Set-Cookie) and (b) unknown session cookie rejected with "Authentication required". Test cleanup deletes ba_session/ba_account/ba_user/users rows by email; teams intentionally left in place because impl-B's Team.destroy cleanup fails on events_teamId_fkey (pre-existing, out of scope). Deviation note: getUserForBetterAuthSession loads the user with the team include (required: true) rather than plain findByPk so downstream consumers behave identically to the legacy path (feature.ts middleware reads user.team non-optionally; team.updateActiveAt parity).
+- [x] G4: auth.delete signs out BA session; auth.info returns collaborationToken ""; auth.config returns providers [] with passwordSigninEnabled.
+  CHECK: grep -n "signOut\|passwordSigninEnabled" server/routes/api/auth/auth.ts | wc -l
+  EXPECT: /^[1-9]/
+  EVIDENCE: grep count = 5 (one signOut call + four passwordSigninEnabled fields). auth.delete calls betterAuth.api.signOut({ headers: requestHeadersFromContext(ctx) }) best-effort inside try/catch when the Cookie header contains "better-auth" or "ba_session", then still rotates the legacy JWT secret and clears the accessToken cookie. auth.info returns collaborationToken "" always (field kept). All four auth.config branches return providers: [] plus passwordSigninEnabled: true with name/hostname/logo/customTheme untouched. Verification: tsc --noEmit exit 0; oxlint --type-aware on all three owned files exit 0; oxfmt --check exit 0.

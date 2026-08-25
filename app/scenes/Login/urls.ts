@@ -62,7 +62,7 @@ export async function validateHost(input: string): Promise<string> {
   }
 
   const config = await Desktop.bridge.loadAuthConfig(origin);
-  if (!Array.isArray(config?.providers)) {
+  if (!config) {
     throw new Error("Host is not an Outline installation");
   }
 

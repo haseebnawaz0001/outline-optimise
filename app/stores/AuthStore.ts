@@ -34,7 +34,14 @@ export type Config = {
   logo?: string;
   customTheme?: Partial<CustomTheme>;
   hostname?: string;
-  providers: Provider[];
+
+  /**
+   * The external authentication providers available on this domain. Always
+   * empty since authentication moved to better-auth; retained for backwards
+   * compatibility with older desktop clients.
+   */
+  providers?: Provider[];
+  passwordSigninEnabled?: boolean;
 };
 
 export default class AuthStore extends Store<Team> {
@@ -81,6 +88,10 @@ export default class AuthStore extends Store<Team> {
   /* The auth configuration for the current domain. */
   @observable
   public config: Config | null | undefined;
+
+  /* Whether email + password sign-in is enabled on the server. */
+  @observable
+  public passwordSigninEnabled?: boolean;
 
   rootStore: RootStore;
 
@@ -198,6 +209,7 @@ export default class AuthStore extends Store<Team> {
     const res = await client.post("/auth.config");
     invariant(res?.data, "Config not available");
     this.config = res.data;
+    this.passwordSigninEnabled = res.data.passwordSigninEnabled !== false;
   };
 
   @action

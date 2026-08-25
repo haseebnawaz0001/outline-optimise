@@ -81,6 +81,32 @@ export class Environment {
   public UTILS_SECRET = environment.UTILS_SECRET ?? "";
 
   /**
+   * The shared secret key that must be supplied when creating a new account.
+   * Required outside of development environments.
+   */
+  @IsOptional()
+  @IsNotEmpty()
+  public AUTH_SIGNUP_KEY = environment.AUTH_SIGNUP_KEY;
+
+  /**
+   * Override for the secret used to sign better-auth session data. Defaults
+   * to SECRET_KEY when unset. Must be at least 32 characters.
+   */
+  @IsOptional()
+  @Length(32, 512, {
+    message: `The BETTER_AUTH_SECRET environment variable must be at least 32 characters.`,
+  })
+  public BETTER_AUTH_SECRET = environment.BETTER_AUTH_SECRET;
+
+  /**
+   * Override for the base URL advertised by better-auth. Defaults to URL.
+   */
+  @IsOptional()
+  @IsUrl()
+  public BETTER_AUTH_URL = environment.BETTER_AUTH_URL;
+
+
+  /**
    * The url of the database.
    */
   @IsOptional()
