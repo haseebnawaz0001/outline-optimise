@@ -1,7 +1,6 @@
 import { partition, uniqBy } from "es-toolkit/compat";
 import { UserRole } from "@shared/types";
 import InviteEmail from "@server/emails/templates/InviteEmail";
-import env from "@server/env";
 import { User, Team } from "@server/models";
 import { UserFlag } from "@server/models/User";
 import type { APIContext } from "@server/types";
