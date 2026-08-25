@@ -13,9 +13,13 @@ import {
 import { useTranslation } from "react-i18next";
 import { useHistory } from "react-router-dom";
 import { toast } from "sonner";
+import styled from "styled-components";
 import { IndexeddbPersistence } from "y-indexeddb";
 import * as Y from "yjs";
-import { EditorUpdateError } from "@shared/collaboration/CloseEvents";
+import {
+  AuthenticationFailed,
+  EditorUpdateError,
+} from "@shared/collaboration/CloseEvents";
 import History from "@shared/editor/extensions/History";
 import EDITOR_VERSION from "@shared/editor/version";
 import { ProsemirrorDataHelper } from "@shared/utils/ProsemirrorDataHelper";
@@ -71,6 +75,7 @@ function MultiplayerEditor(
   const [hasLocalPersistence, setHasLocalPersistence] = useState(true);
   const [isLocalSynced, setLocalSynced] = useState(false);
   const [isRemoteSynced, setRemoteSynced] = useState(false);
+  const [hasAuthenticationFailed, setAuthenticationFailed] = useState(false);
   const [ydoc] = useState(() => new Y.Doc());
   const token = auth.collaborationToken;
   const isIdle = useIdle();
@@ -126,6 +131,7 @@ function MultiplayerEditor(
 
     provider.on("authenticationFailed", () => {
       provider.shouldConnect = false;
+      setAuthenticationFailed(true);
       retryCount.current++;
 
       void sleep(retryCount.current * 1000 - 1000).then(() =>
@@ -179,6 +185,7 @@ function MultiplayerEditor(
     provider.on("synced", () => {
       presence.touch(documentId, currentUser.id, false);
       setRemoteSynced(true);
+      setAuthenticationFailed(false);
       retryCount.current = 0;
     });
 
@@ -187,6 +194,12 @@ function MultiplayerEditor(
         // Note other close code are handled internally by the library
         if (ev.event.code === EditorUpdateError.code) {
           provider.shouldConnect = false;
+        }
+
+        // The connection was refused before it was authenticated, so edits
+        // made now could never reach the server.
+        if (ev.event.code === AuthenticationFailed.code) {
+          setAuthenticationFailed(true);
         }
 
         ui.setMultiplayerStatus("disconnected", ev.event.code);
@@ -335,6 +348,13 @@ function MultiplayerEditor(
 
   return (
     <>
+      {showCache && ui.multiplayerStatus === "disconnected" && (
+        <CacheNotice>
+          {t(
+            "Viewing a cached copy – editing is disabled until the document loads from the server"
+          )}
+        </CacheNotice>
+      )}
       {showCache && (
         <Editor
           editorStyle={props.editorStyle}
@@ -349,7 +369,9 @@ function MultiplayerEditor(
       )}
       <Editor
         {...props}
-        readOnly={props.readOnly || editorVersionBehind}
+        readOnly={
+          props.readOnly || editorVersionBehind || hasAuthenticationFailed
+        }
         value={undefined}
         defaultValue={undefined}
         extensions={extensions}
@@ -391,5 +413,13 @@ function hasContent(value: Props["defaultValue"]): boolean {
 
   return !ProsemirrorDataHelper.isEmpty(value);
 }
+
+const CacheNotice = styled.div`
+  color: ${(props) => props.theme.textSecondary};
+  font-size: 14px;
+  font-weight: 500;
+  padding: 12px 0;
+  text-align: center;
+`;
 
 export default forwardRef<SharedEditor, Props>(MultiplayerEditor);

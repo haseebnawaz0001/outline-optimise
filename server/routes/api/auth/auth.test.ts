@@ -6,9 +6,8 @@ import {
   buildOAuthAuthentication,
   buildUser,
   buildTeam,
-  buildUserPasskey,
 } from "@server/test/factories";
-import { getTestServer, setSelfHosted } from "@server/test/support";
+import { getTestServer } from "@server/test/support";
 
 const mockTeamInSessionId = randomUUID();
 
@@ -119,27 +118,19 @@ describe("#auth.delete", () => {
 });
 
 describe("#auth.config", () => {
-  it("should return available SSO providers", async () => {
+  it("should return no external providers and enable password sign-in", async () => {
     const res = await server.post("/api/auth.config");
     const body = await res.json();
     expect(res.status).toEqual(200);
-    expect(body.data.providers.length).toBe(3);
-    expect(body.data.providers[0].name).toBe("Slack");
-    expect(body.data.providers[1].name).toBe("OpenID Connect");
-    expect(body.data.providers[2].name).toBe("Google");
+    expect(body.data.providers).toEqual([]);
+    expect(body.data.passwordSigninEnabled).toBe(true);
   });
 
-  it("should return available providers for team subdomain", async () => {
+  it("should return team details for team subdomain", async () => {
     const subdomain = faker.internet.domainWord();
     await buildTeam({
       guestSignin: false,
       subdomain,
-      authenticationProviders: [
-        {
-          name: "slack",
-          providerId: randomUUID(),
-        },
-      ],
     });
     const res = await server.post("/api/auth.config", {
       headers: {
@@ -148,21 +139,16 @@ describe("#auth.config", () => {
     });
     const body = await res.json();
     expect(res.status).toEqual(200);
-    expect(body.data.providers.length).toBe(1);
-    expect(body.data.providers[0].name).toBe("Slack");
+    expect(body.data.providers).toEqual([]);
+    expect(body.data.passwordSigninEnabled).toBe(true);
+    expect(body.data.hostname).toBe(`${subdomain}.outline.dev`);
   });
 
-  it("should return available providers for team custom domain", async () => {
+  it("should return team details for team custom domain", async () => {
     const domain = faker.internet.domainName();
     await buildTeam({
       guestSignin: false,
       domain,
-      authenticationProviders: [
-        {
-          name: "slack",
-          providerId: randomUUID(),
-        },
-      ],
     });
     const res = await server.post("/api/auth.config", {
       headers: {
@@ -171,148 +157,8 @@ describe("#auth.config", () => {
     });
     const body = await res.json();
     expect(res.status).toEqual(200);
-    expect(body.data.providers.length).toBe(1);
-    expect(body.data.providers[0].name).toBe("Slack");
-  });
-
-  it("should return email provider for team when guest signin enabled", async () => {
-    const subdomain = faker.internet.domainWord();
-    await buildTeam({
-      guestSignin: true,
-      subdomain,
-      authenticationProviders: [
-        {
-          name: "slack",
-          providerId: randomUUID(),
-        },
-      ],
-    });
-    const res = await server.post("/api/auth.config", {
-      headers: {
-        host: `${subdomain}.outline.dev`,
-      },
-    });
-    const body = await res.json();
-    expect(res.status).toEqual(200);
-    expect(body.data.providers.length).toBe(2);
-    expect(body.data.providers[0].name).toBe("Slack");
-    expect(body.data.providers[1].name).toBe("Email");
-  });
-
-  it("should not return provider when disabled", async () => {
-    const subdomain = faker.internet.domainWord();
-    await buildTeam({
-      guestSignin: false,
-      subdomain,
-      authenticationProviders: [
-        {
-          name: "slack",
-          providerId: randomUUID(),
-          enabled: false,
-        },
-      ],
-    });
-    const res = await server.post("/api/auth.config", {
-      headers: {
-        host: `${subdomain}.outline.dev`,
-      },
-    });
-    const body = await res.json();
-    expect(res.status).toEqual(200);
-    expect(body.data.providers.length).toBe(0);
-  });
-
-  it("should not return passkeys provider when passkeysEnabled but no passkeys exist", async () => {
-    const subdomain = faker.internet.domainWord();
-    await buildTeam({
-      guestSignin: false,
-      passkeysEnabled: true,
-      subdomain,
-      authenticationProviders: [
-        {
-          name: "slack",
-          providerId: randomUUID(),
-        },
-      ],
-    });
-    const res = await server.post("/api/auth.config", {
-      headers: {
-        host: `${subdomain}.outline.dev`,
-      },
-    });
-    const body = await res.json();
-    expect(res.status).toEqual(200);
-    expect(body.data.providers.length).toBe(1);
-    expect(body.data.providers[0].name).toBe("Slack");
-  });
-
-  it("should return passkeys provider when passkeysEnabled and passkeys exist", async () => {
-    const subdomain = faker.internet.domainWord();
-    const team = await buildTeam({
-      guestSignin: false,
-      passkeysEnabled: true,
-      subdomain,
-      authenticationProviders: [
-        {
-          name: "slack",
-          providerId: randomUUID(),
-        },
-      ],
-    });
-    const user = await buildUser({ teamId: team.id });
-    await buildUserPasskey({ userId: user.id });
-    const res = await server.post("/api/auth.config", {
-      headers: {
-        host: `${subdomain}.outline.dev`,
-      },
-    });
-    const body = await res.json();
-    expect(res.status).toEqual(200);
-    expect(body.data.providers.length).toBe(2);
-    expect(body.data.providers[0].name).toBe("Slack");
-    expect(body.data.providers[1].name).toBe("Passkeys");
-  });
-
-  describe.skip("self hosted", () => {
-    beforeEach(setSelfHosted);
-
-    it("should return all configured providers but respect email setting", async () => {
-      await buildTeam({
-        guestSignin: false,
-        authenticationProviders: [
-          {
-            name: "slack",
-            providerId: randomUUID(),
-          },
-        ],
-      });
-      const res = await server.post("/api/auth.config");
-      const body = await res.json();
-      expect(res.status).toEqual(200);
-      expect(body.data.providers.length).toBe(3);
-      expect(body.data.providers[0].name).toBe("Google");
-      expect(body.data.providers[1].name).toBe("OpenID Connect");
-      expect(body.data.providers[2].name).toBe("Slack");
-    });
-
-    it("should return email provider for team when guest signin enabled", async () => {
-      await buildTeam({
-        guestSignin: true,
-        authenticationProviders: [
-          {
-            name: "slack",
-            providerId: randomUUID(),
-          },
-        ],
-      });
-      const res = await server.post("/api/auth.config");
-      const body = await res.json();
-      expect(res.status).toEqual(200);
-      expect(body.data.providers.length).toBe(4);
-      expect(body.data.providers[0].name).toBe("Slack");
-      expect(body.data.providers[1].name).toBe("OpenID Connect");
-      expect(body.data.providers[2].name).toBe("Google");
-      expect(body.data.providers[3].name).toBe("Email");
-    });
+    expect(body.data.providers).toEqual([]);
+    expect(body.data.passwordSigninEnabled).toBe(true);
+    expect(body.data.hostname).toBe(domain);
   });
 });

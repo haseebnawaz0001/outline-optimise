@@ -266,6 +266,10 @@ export default class AuthenticationExtension implements Extension {
    * Resolves the user owning a connection from the better-auth session
    * carried by the headers of its WebSocket upgrade request.
    *
+   * The names of the headers are logged so that a proxy stripping, say, the
+   * `cookie` header on upgrade requests can be identified without exposing
+   * any credential values.
+   *
    * @param requestHeaders The headers of the upgrade request.
    * @returns The user when a valid session exists and maps to an Outline
    * user, otherwise null.
@@ -273,6 +277,10 @@ export default class AuthenticationExtension implements Extension {
   private async authenticate(
     requestHeaders: IncomingHttpHeaders
   ): Promise<User | null> {
+    Logger.debug("multiplayer", "Resolving connection from upgrade headers", {
+      headerNames: Object.keys(requestHeaders),
+    });
+
     const session = await getBetterAuthSession(
       headersFromRequest(requestHeaders)
     );

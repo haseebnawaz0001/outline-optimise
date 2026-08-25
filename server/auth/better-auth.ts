@@ -3,8 +3,10 @@ import { APIError, createAuthMiddleware } from "better-auth/api";
 import { betterAuth } from "better-auth";
 import { toNodeHandler } from "better-auth/node";
 import { Pool } from "pg";
+import { toError } from "@shared/utils/error";
 import env from "@server/env";
 import { provisionBetterAuthUser } from "@server/commands/provisionBetterAuthUser";
+import Logger from "@server/logging/Logger";
 import { User } from "@server/models";
 
 /**
@@ -191,13 +193,19 @@ export const auth = betterAuth({
 /**
  * Resolves a better-auth session from request headers.
  *
+ * A missing or expired session resolves to null without logging, as that is
+ * an expected state for anonymous requests. An error thrown while resolving
+ * the session is logged, as it masks the difference between "no session" and
+ * a broken setup.
+ *
  * @param headers The request headers as a Fetch API Headers object.
  * @returns The session and user when a valid session exists, otherwise null.
  */
 export async function getBetterAuthSession(headers: Headers) {
   try {
     return await auth.api.getSession({ headers });
-  } catch {
+  } catch (error) {
+    Logger.error("Failed to resolve better-auth session", toError(error));
     return null;
   }
 }
