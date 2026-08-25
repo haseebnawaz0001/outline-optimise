@@ -187,7 +187,7 @@
     "octokit": "^5.0.5",
     "outline-icons": "^4.6.0",
     "oy-vey": "^0.12.1",
-    "pako": "^2.1.0",
+    "pako": "^2.2.0",
     "patch-package": "^8.0.1",
     "pg": "^8.20.0",
     "pg-tsquery": "^8.4.2",
